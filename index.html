@@ -2601,7 +2601,7 @@
       </div>
     </div>
 
-    <button class="mode-popup-close bundle-buy-btn" id="bundle-buy-btn" data-i18n="getRemoveAds" style="margin-top:20px;">GET AD-FREE — €2.99</button>
+    <button class="mode-popup-close bundle-buy-btn" id="bundle-buy-btn" data-i18n="getRemoveAds" style="margin-top:20px;">GET AD-FREE — €0.99</button>
     <button class="bundle-close-btn" id="bundle-close-btn" data-i18n="maybeLater">Maybe later</button>
   </div>
 </div>
@@ -2680,10 +2680,7 @@
 
     <!-- Auth buttons -->
     <div class="auth-btns">
-      <button class="auth-btn auth-apple" id="btn-auth-apple">
-        <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
-        Continue with Apple
-      </button>
+
       <button class="auth-btn auth-google" id="btn-auth-google">
         <svg viewBox="0 0 24 24" width="18" height="18"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
         Continue with Google
@@ -2840,6 +2837,7 @@
     <div class="memory-bar-wrap hidden" id="memory-bar-wrap">
       <div class="memory-bar-fill" id="memory-bar-fill"></div>
     </div>
+    <div class="memory-label-top hidden" id="memory-label-top">MEMORISE</div>
     
     <!-- legacy overlay kept hidden -->
     <div class="memory-overlay hidden" id="memory-overlay"></div>
@@ -3284,6 +3282,15 @@ const SupabaseDB = (() => {
     localStorage.removeItem('auth_user');
   }
 
+  async function signInWithGoogle() {
+    const redirectTo = window.location.origin + window.location.pathname;
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(redirectTo)}`, {
+      method: 'GET',
+      headers: { 'apikey': SUPABASE_ANON_KEY }
+    });
+    return { url: `${SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(redirectTo)}` };
+  }
+
   async function resetPassword(email) {
     // Redirect URL: after user clicks the reset link in email, they return here
     const redirectTo = window.location.origin + window.location.pathname;
@@ -3575,7 +3582,7 @@ const SupabaseDB = (() => {
   }
 
   return {
-    restoreSession, signUp, signIn, signOut, resetPassword, changeEmail, deleteAccount,
+    restoreSession, signUp, signIn, signOut, resetPassword, changeEmail, deleteAccount, signInWithGoogle,
     setSessionFromRecovery, updatePassword,
     upsertPlayer, getPlayerByFriendCode, getPlayerByUsername, getPlayerById,
     upsertScore, getLeaderboard, getSurvivalLeaderboard,
@@ -3913,29 +3920,26 @@ function buildModeStrip() {
   modes.forEach(m => {
     const btn = document.createElement('button');
     btn.className = 'mode-btn' + (State.mode === m.id ? ' active' : '');
-    const unlocked = State.unlockedModes.includes(m.id);
-    if (!unlocked) btn.classList.add('locked');
+    const unlocked = true;
 
     const labelSpan = document.createElement('span');
     labelSpan.textContent = m.label;
     btn.appendChild(labelSpan);
 
+
+
+
+
     const dot = document.createElement('span');
     dot.className   = 'info-dot';
-    dot.textContent = '!';
+    dot.textContent = '?';
     dot.addEventListener('click', e => {
       e.stopPropagation();
       showModePopup(m);
     });
     btn.appendChild(dot);
 
-
-
     btn.addEventListener('click', () => {
-      if (!unlocked) {
-        showModePopup(m, true); // true = show buy button
-        return;
-      }
       State.mode = m.id;
       buildLevelSelect();
     });
@@ -3947,7 +3951,7 @@ function buildModeStrip() {
     const bundle = document.createElement('button');
     bundle.className = 'mode-btn bundle-btn';
     // Ad-slash icon + "Remove Ads" label + price
-    bundle.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;display:block"><path d="M4.93 4.93l14.14 14.14"/><rect x="2" y="4" width="20" height="16" rx="2"/></svg><span>${t('removeAds')}</span><span class="price-tag" style="position:relative;top:0;right:0;margin-left:6px;display:inline-block;">€2.99</span>`;
+    bundle.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;display:block"><path d="M4.93 4.93l14.14 14.14"/><rect x="2" y="4" width="20" height="16" rx="2"/></svg><span>${t('removeAds')}</span><span class="price-tag" style="position:relative;top:0;right:0;margin-left:6px;display:inline-block;">€0.99</span>`;
     bundle.style.cssText += ';display:flex;align-items:center;gap:8px;justify-content:center;';
     bundle.addEventListener('click', () => showBundlePopup());
     strip.appendChild(bundle);
@@ -5844,7 +5848,7 @@ const T = {
     includes:'INCLUDES:',
     bundle:'Bundle',
     bundleOwned:'Bundle · Owned',
-    getBundle:'GET BUNDLE — €2.99',
+    getBundle:'GET BUNDLE — €0.99',
     buyIndividually:'Buy individually instead',
     save:'€0.97',
     startBtn:'START',
@@ -5902,7 +5906,7 @@ const T = {
     // Copy btn
     copyBtn:'COPY', copiedBtn:'COPIED!',
     // Memory diff
-    diffEasy:'5s — Easy', diffNormal:'3s — Normal', diffHard:'2s — Hard',
+    memDiffEasy:'5s — Easy', memDiffNormal:'3s — Normal', memDiffHard:'2s — Hard',
     // Survival info card
     survivalSub:'3.5s per tap · How far can you go?',
   
@@ -5959,7 +5963,7 @@ const T = {
     benefitSupportDesc:'Help keep the game free',
     benefitForever:'One-time purchase',
     benefitForeverDesc:'No subscription. Yours forever.',
-    getRemoveAds:'GET AD-FREE — €2.99',
+    getRemoveAds:'GET AD-FREE — €0.99',
     maybeLater:'Maybe later',
   
     // ── Friends empty ──
@@ -6065,7 +6069,7 @@ const T = {
     includes:'ВКЛЮЧВА:',
     bundle:'Пакет',
     bundleOwned:'Пакет · Притежаван',
-    getBundle:'ВЗЕМИ ПАКЕТА — €2.99',
+    getBundle:'ВЗЕМИ ПАКЕТА — €0.99',
     buyIndividually:'Купи поотделно',
     save:'€0.97',
     startBtn:'СТАРТ',
@@ -6115,7 +6119,7 @@ const T = {
     you:' (ти)',
     tapToStart:'Натисни за старт',
     copyBtn:'КОПИРАЙ', copiedBtn:'КОПИРАНО!',
-    diffEasy:'5с — Лесно', diffNormal:'3с — Средно', diffHard:'2с — Трудно',
+    memDiffEasy:'5с — Лесно', memDiffNormal:'3с — Средно', memDiffHard:'2с — Трудно',
     survivalSub:'3.5с на натискане · Докъде ще стигнеш?',
   
     // ── Added translations ──
@@ -6171,7 +6175,7 @@ const T = {
     benefitSupportDesc:'Помогни играта да остане безплатна',
     benefitForever:'Еднократна покупка',
     benefitForeverDesc:'Без абонамент. Твое завинаги.',
-    getRemoveAds:'МАХНИ РЕКЛАМИТЕ — €2.99',
+    getRemoveAds:'МАХНИ РЕКЛАМИТЕ — €0.99',
     maybeLater:'Може би по-късно',
   
     // ── Friends empty ──
@@ -6277,7 +6281,7 @@ const T = {
     includes:'ENTHÄLT:',
     bundle:'Paket',
     bundleOwned:'Paket · Im Besitz',
-    getBundle:'PAKET HOLEN — €2.99',
+    getBundle:'PAKET HOLEN — €0.99',
     buyIndividually:'Einzeln kaufen',
     save:'€0.97',
     startBtn:'START',
@@ -6327,7 +6331,7 @@ const T = {
     you:' (du)',
     tapToStart:'Zum Starten tippen',
     copyBtn:'KOPIEREN', copiedBtn:'KOPIERT!',
-    diffEasy:'5s — Leicht', diffNormal:'3s — Mittel', diffHard:'2s — Schwer',
+    memDiffEasy:'5s — Leicht', memDiffNormal:'3s — Mittel', memDiffHard:'2s — Schwer',
     survivalSub:'3,5s pro Tippen · Wie weit kommst du?',
   
     // ── Added translations ──
@@ -6383,7 +6387,7 @@ const T = {
     benefitSupportDesc:'Hilf, das Spiel kostenlos zu halten',
     benefitForever:'Einmaliger Kauf',
     benefitForeverDesc:'Kein Abo. Für immer dein.',
-    getRemoveAds:'WERBEFREI — €2.99',
+    getRemoveAds:'WERBEFREI — €0.99',
     maybeLater:'Vielleicht später',
   
     // ── Friends empty ──
@@ -6489,7 +6493,7 @@ const T = {
     includes:'INCLUYE:',
     bundle:'Paquete',
     bundleOwned:'Paquete · Comprado',
-    getBundle:'OBTENER PAQUETE — €2.99',
+    getBundle:'OBTENER PAQUETE — €0.99',
     buyIndividually:'Comprar individualmente',
     save:'€0.97',
     startBtn:'INICIO',
@@ -6539,7 +6543,7 @@ const T = {
     you:' (tú)',
     tapToStart:'Toca para empezar',
     copyBtn:'COPIAR', copiedBtn:'¡COPIADO!',
-    diffEasy:'5s — Fácil', diffNormal:'3s — Normal', diffHard:'2s — Difícil',
+    memDiffEasy:'5s — Fácil', memDiffNormal:'3s — Normal', memDiffHard:'2s — Difícil',
     survivalSub:'3,5s por toque · ¿Hasta dónde llegas?',
   
     // ── Added translations ──
@@ -6595,7 +6599,7 @@ const T = {
     benefitSupportDesc:'Ayuda a mantener el juego gratuito',
     benefitForever:'Compra única',
     benefitForeverDesc:'Sin suscripción. Tuyo para siempre.',
-    getRemoveAds:'SIN ANUNCIOS — €2.99',
+    getRemoveAds:'SIN ANUNCIOS — €0.99',
     maybeLater:'Quizás más tarde',
   
     // ── Friends empty ──
@@ -6701,7 +6705,7 @@ const T = {
     includes:'COMPREND :',
     bundle:'Pack',
     bundleOwned:'Pack · Possédé',
-    getBundle:'OBTENIR LE PACK — €2.99',
+    getBundle:'OBTENIR LE PACK — €0.99',
     buyIndividually:'Acheter individuellement',
     save:'€0.97',
     startBtn:'DÉPART',
@@ -6751,7 +6755,7 @@ const T = {
     you:' (vous)',
     tapToStart:'Appuyez pour commencer',
     copyBtn:'COPIER', copiedBtn:'COPIÉ !',
-    diffEasy:'5s — Facile', diffNormal:'3s — Normal', diffHard:'2s — Difficile',
+    memDiffEasy:'5s — Facile', memDiffNormal:'3s — Normal', memDiffHard:'2s — Difficile',
     survivalSub:"3,5s par appui · Jusqu'où irez-vous?",
   
     // ── Added translations ──
@@ -6807,7 +6811,7 @@ const T = {
     benefitSupportDesc:'Aide à garder le jeu gratuit',
     benefitForever:'Achat unique',
     benefitForeverDesc:'Sans abonnement. À toi pour toujours.',
-    getRemoveAds:'SANS PUB — €2.99',
+    getRemoveAds:'SANS PUB — €0.99',
     maybeLater:'Peut-être plus tard',
   
     // ── Friends empty ──
@@ -6913,7 +6917,7 @@ const T = {
     includes:'INCLUDE:',
     bundle:'Pacchetto',
     bundleOwned:'Pacchetto · Posseduto',
-    getBundle:'OTTIENI PACCHETTO — €2.99',
+    getBundle:'OTTIENI PACCHETTO — €0.99',
     buyIndividually:'Acquista singolarmente',
     save:'€0.97',
     startBtn:'INIZIA',
@@ -6963,7 +6967,7 @@ const T = {
     you:' (tu)',
     tapToStart:'Tocca per iniziare',
     copyBtn:'COPIA', copiedBtn:'COPIATO!',
-    diffEasy:'5s — Facile', diffNormal:'3s — Normale', diffHard:'2s — Difficile',
+    memDiffEasy:'5s — Facile', memDiffNormal:'3s — Normale', memDiffHard:'2s — Difficile',
     survivalSub:'3,5s per tocco · Fino a dove arrivi?',
   
     // ── Added translations ──
@@ -7019,7 +7023,7 @@ const T = {
     benefitSupportDesc:'Aiuta a mantenere il gioco gratuito',
     benefitForever:'Acquisto unico',
     benefitForeverDesc:'Nessun abbonamento. Tuo per sempre.',
-    getRemoveAds:'SENZA ANNUNCI — €2.99',
+    getRemoveAds:'SENZA ANNUNCI — €0.99',
     maybeLater:'Forse più tardi',
   
     // ── Friends empty ──
@@ -7125,7 +7129,7 @@ const T = {
     includes:'INCLUI:',
     bundle:'Pacote',
     bundleOwned:'Pacote · Comprado',
-    getBundle:'OBTER PACOTE — €2.99',
+    getBundle:'OBTER PACOTE — €0.99',
     buyIndividually:'Comprar individualmente',
     save:'€0.97',
     startBtn:'INICIAR',
@@ -7175,7 +7179,7 @@ const T = {
     you:' (você)',
     tapToStart:'Toque para começar',
     copyBtn:'COPIAR', copiedBtn:'COPIADO!',
-    diffEasy:'5s — Fácil', diffNormal:'3s — Normal', diffHard:'2s — Difícil',
+    memDiffEasy:'5s — Fácil', memDiffNormal:'3s — Normal', memDiffHard:'2s — Difícil',
     survivalSub:'3,5s por toque · Até onde vai?',
   
     // ── Added translations ──
@@ -7231,7 +7235,7 @@ const T = {
     benefitSupportDesc:'Ajude a manter o jogo gratuito',
     benefitForever:'Compra única',
     benefitForeverDesc:'Sem assinatura. Seu para sempre.',
-    getRemoveAds:'SEM ANÚNCIOS — €2.99',
+    getRemoveAds:'SEM ANÚNCIOS — €0.99',
     maybeLater:'Talvez depois',
   
     // ── Friends empty ──
@@ -7337,7 +7341,7 @@ const T = {
     includes:'ВКЛЮЧАЕТ:',
     bundle:'Пакет',
     bundleOwned:'Пакет · Куплен',
-    getBundle:'КУПИТЬ ПАКЕТ — €2.99',
+    getBundle:'КУПИТЬ ПАКЕТ — €0.99',
     buyIndividually:'Купить по отдельности',
     save:'€0.97',
     startBtn:'СТАРТ',
@@ -7387,7 +7391,7 @@ const T = {
     you:' (ты)',
     tapToStart:'Нажми для начала',
     copyBtn:'КОПИРОВАТЬ', copiedBtn:'СКОПИРОВАНО!',
-    diffEasy:'5с — Легко', diffNormal:'3с — Средне', diffHard:'2с — Сложно',
+    memDiffEasy:'5с — Легко', memDiffNormal:'3с — Средне', memDiffHard:'2с — Сложно',
     survivalSub:'3,5с на нажатие · Как далеко зайдёшь?',
   
     // ── Added translations ──
@@ -7443,7 +7447,7 @@ const T = {
     benefitSupportDesc:'Помоги игре оставаться бесплатной',
     benefitForever:'Разовая покупка',
     benefitForeverDesc:'Без подписки. Твоё навсегда.',
-    getRemoveAds:'БЕЗ РЕКЛАМЫ — €2.99',
+    getRemoveAds:'БЕЗ РЕКЛАМЫ — €0.99',
     maybeLater:'Может быть позже',
   
     // ── Friends empty ──
@@ -7549,7 +7553,7 @@ const T = {
     includes:'İÇERİR:',
     bundle:'Paket',
     bundleOwned:'Paket · Satın Alındı',
-    getBundle:'PAKETİ AL — €2.99',
+    getBundle:'PAKETİ AL — €0.99',
     buyIndividually:'Tek tek satın al',
     save:'€0.97',
     startBtn:'BAŞLA',
@@ -7599,7 +7603,7 @@ const T = {
     you:' (sen)',
     tapToStart:'Başlamak için dokun',
     copyBtn:'KOPYALA', copiedBtn:'KOPYALANDI!',
-    diffEasy:'5s — Kolay', diffNormal:'3s — Orta', diffHard:'2s — Zor',
+    memDiffEasy:'5s — Kolay', memDiffNormal:'3s — Orta', memDiffHard:'2s — Zor',
     survivalSub:'3,5s dokunuş başına · Ne kadar gidebilirsin?',
   
     // ── Added translations ──
@@ -7655,7 +7659,7 @@ const T = {
     benefitSupportDesc:'Oyunun ücretsiz kalmasına yardım et',
     benefitForever:'Tek seferlik satın alma',
     benefitForeverDesc:'Abonelik yok. Sonsuza dek senin.',
-    getRemoveAds:'REKLAMSIZ — €2.99',
+    getRemoveAds:'REKLAMSIZ — €0.99',
     maybeLater:'Belki sonra',
   
     // ── Friends empty ──
@@ -7761,7 +7765,7 @@ const T = {
     includes:':يشمل',
     bundle:'حزمة',
     bundleOwned:'حزمة · مملوكة',
-    getBundle:'احصل على الحزمة — €2.99',
+    getBundle:'احصل على الحزمة — €0.99',
     buyIndividually:'شراء فردي',
     save:'€0.97',
     startBtn:'ابدأ',
@@ -7811,7 +7815,7 @@ const T = {
     you:' (أنت)',
     tapToStart:'اضغط للبدء',
     copyBtn:'نسخ', copiedBtn:'!تم النسخ',
-    diffEasy:'5 ث — سهل', diffNormal:'3 ث — متوسط', diffHard:'2 ث — صعب',
+    memDiffEasy:'5 ث — سهل', memDiffNormal:'3 ث — متوسط', memDiffHard:'2 ث — صعب',
     survivalSub:'3.5 ث لكل ضغطة · إلى أين ستصل؟',
   
     // ── Added translations ──
@@ -7867,7 +7871,7 @@ const T = {
     benefitSupportDesc:'ساعد في إبقاء اللعبة مجانية',
     benefitForever:'عملية شراء واحدة',
     benefitForeverDesc:'بدون اشتراك. لك إلى الأبد.',
-    getRemoveAds:'بدون إعلانات — €2.99',
+    getRemoveAds:'بدون إعلانات — €0.99',
     maybeLater:'ربما لاحقاً',
   
     // ── Friends empty ──
@@ -7973,7 +7977,7 @@ const T = {
     includes:'शामिल है:',
     bundle:'बंडल',
     bundleOwned:'बंडल · खरीदा गया',
-    getBundle:'बंडल लें — €2.99',
+    getBundle:'बंडल लें — €0.99',
     buyIndividually:'अलग से खरीदें',
     save:'€0.97',
     startBtn:'शुरू',
@@ -8023,7 +8027,7 @@ const T = {
     you:' (आप)',
     tapToStart:'शुरू करने के लिए टैप करें',
     copyBtn:'कॉपी', copiedBtn:'कॉपी हो गया!',
-    diffEasy:'5s — आसान', diffNormal:'3s — मध्यम', diffHard:'2s — कठिन',
+    memDiffEasy:'5s — आसान', memDiffNormal:'3s — मध्यम', memDiffHard:'2s — कठिन',
     survivalSub:'3.5s प्रति टैप · कहाँ तक पहुँचेंगे?',
   
     // ── Added translations ──
@@ -8079,7 +8083,7 @@ const T = {
     benefitSupportDesc:'गेम को मुफ्त रखने में मदद करें',
     benefitForever:'एक बार की खरीदारी',
     benefitForeverDesc:'कोई सदस्यता नहीं। हमेशा के लिए आपका।',
-    getRemoveAds:'विज्ञापन हटाएं — €2.99',
+    getRemoveAds:'विज्ञापन हटाएं — €0.99',
     maybeLater:'शायद बाद में',
   
     // ── Friends empty ──
@@ -8185,7 +8189,7 @@ const T = {
     includes:'含む：',
     bundle:'バンドル',
     bundleOwned:'バンドル · 購入済み',
-    getBundle:'バンドルを入手 — €2.99',
+    getBundle:'バンドルを入手 — €0.99',
     buyIndividually:'個別購入',
     save:'€0.97',
     startBtn:'スタート',
@@ -8235,7 +8239,7 @@ const T = {
     you:' (あなた)',
     tapToStart:'タップしてスタート',
     copyBtn:'コピー', copiedBtn:'コピー済！',
-    diffEasy:'5s — 簡単', diffNormal:'3s — 普通', diffHard:'2s — 難しい',
+    memDiffEasy:'5s — 簡単', memDiffNormal:'3s — 普通', memDiffHard:'2s — 難しい',
     survivalSub:'1タップ3.5s · どこまでいける？',
   
     // ── Added translations ──
@@ -8291,7 +8295,7 @@ const T = {
     benefitSupportDesc:'ゲームを無料に保つ手助けを',
     benefitForever:'一度限りの購入',
     benefitForeverDesc:'サブスクリプションなし。永久にあなたのもの。',
-    getRemoveAds:'広告削除 — €2.99',
+    getRemoveAds:'広告削除 — €0.99',
     maybeLater:'後で',
   
     // ── Friends empty ──
@@ -8397,7 +8401,7 @@ const T = {
     includes:'포함:',
     bundle:'번들',
     bundleOwned:'번들 · 구매됨',
-    getBundle:'번들 구매 — €2.99',
+    getBundle:'번들 구매 — €0.99',
     buyIndividually:'개별 구매',
     save:'€0.97',
     startBtn:'시작',
@@ -8447,7 +8451,7 @@ const T = {
     you:' (나)',
     tapToStart:'탭해서 시작',
     copyBtn:'복사', copiedBtn:'복사됨!',
-    diffEasy:'5s — 쉬움', diffNormal:'3s — 보통', diffHard:'2s — 어려움',
+    memDiffEasy:'5s — 쉬움', memDiffNormal:'3s — 보통', memDiffHard:'2s — 어려움',
     survivalSub:'탭당 3.5초 · 얼마나 갈 수 있나요?',
   
     // ── Added translations ──
@@ -8503,7 +8507,7 @@ const T = {
     benefitSupportDesc:'게임 무료 유지를 도와주세요',
     benefitForever:'1회 구매',
     benefitForeverDesc:'구독 없음. 영원히 당신의 것.',
-    getRemoveAds:'광고 제거 — €2.99',
+    getRemoveAds:'광고 제거 — €0.99',
     maybeLater:'나중에',
   
     // ── Friends empty ──
@@ -8609,7 +8613,7 @@ const T = {
     includes:'包含：',
     bundle:'套餐',
     bundleOwned:'套餐 · 已购买',
-    getBundle:'获取套餐 — €2.99',
+    getBundle:'获取套餐 — €0.99',
     buyIndividually:'单独购买',
     save:'€0.97',
     startBtn:'开始',
@@ -8659,7 +8663,7 @@ const T = {
     you:' (你)',
     tapToStart:'点击开始',
     copyBtn:'复制', copiedBtn:'已复制！',
-    diffEasy:'5秒 — 简单', diffNormal:'3秒 — 普通', diffHard:'2秒 — 困难',
+    memDiffEasy:'5秒 — 简单', memDiffNormal:'3秒 — 普通', memDiffHard:'2秒 — 困难',
     survivalSub:'每次点击3.5秒 · 你能走多远？',
   
     // ── Added translations ──
@@ -8715,7 +8719,7 @@ const T = {
     benefitSupportDesc:'帮助保持游戏免费',
     benefitForever:'一次性购买',
     benefitForeverDesc:'没有订阅。永远属于您。',
-    getRemoveAds:'移除广告 — €2.99',
+    getRemoveAds:'移除广告 — €0.99',
     maybeLater:'稍后再说',
   
     // ── Friends empty ──
@@ -8867,9 +8871,9 @@ function applyLang() {
 
   // Memory diff buttons
   document.querySelectorAll('.diff-btn').forEach(b => {
-    if (b.dataset.diff === 'easy')   b.textContent = t('diffEasy');
-    if (b.dataset.diff === 'normal') b.textContent = t('diffNormal');
-    if (b.dataset.diff === 'hard')   b.textContent = t('diffHard');
+    if (b.dataset.diff === 'easy')   b.textContent = t('memDiffEasy');
+    if (b.dataset.diff === 'normal') b.textContent = t('memDiffNormal');
+    if (b.dataset.diff === 'hard')   b.textContent = t('memDiffHard');
   });
 
   // Bundle/Remove-Ads popup — handled entirely via data-i18n attributes
@@ -9423,13 +9427,18 @@ async function enterApp() {
 }
 
 // Apple / Google — placeholder (real OAuth via Capacitor later)
-document.getElementById('btn-auth-apple').addEventListener('click', () => {
-  localStorage.setItem('auth_user', JSON.stringify({ method:'apple', name:'' }));
-  enterApp();
-});
-document.getElementById('btn-auth-google').addEventListener('click', () => {
-  localStorage.setItem('auth_user', JSON.stringify({ method:'google', name:'' }));
-  enterApp();
+document.getElementById('btn-auth-google').addEventListener('click', async () => {
+  if (!SupabaseDB.isConfigured()) {
+    localStorage.setItem('auth_user', JSON.stringify({ method:'google', name:'' }));
+    enterApp();
+    return;
+  }
+  try {
+    const { url } = await SupabaseDB.signInWithGoogle();
+    if (url) window.location.href = url;
+  } catch(e) {
+    console.error('Google sign in error:', e);
+  }
 });
 
 // Guest
