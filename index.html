@@ -3283,11 +3283,7 @@ const SupabaseDB = (() => {
   }
 
   async function signInWithGoogle() {
-    const redirectTo = window.location.origin + window.location.pathname;
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(redirectTo)}`, {
-      method: 'GET',
-      headers: { 'apikey': SUPABASE_ANON_KEY }
-    });
+    const redirectTo = 'https://hzlatev1.github.io/numrush/';
     return { url: `${SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(redirectTo)}` };
   }
 
@@ -9745,24 +9741,38 @@ async function initApp() {
   applyLang();
 
   // ── RECOVERY FLOW: check if URL contains recovery tokens ─────────────────
-  // Supabase redirects with #access_token=...&refresh_token=...&type=recovery
   const hash = window.location.hash;
   if (hash && hash.includes('type=recovery') && SupabaseDB.isConfigured()) {
     const params = new URLSearchParams(hash.substring(1));
     const accessToken  = params.get('access_token');
-    const refreshToken = params.get('refresh_token');
-    if (accessToken && refreshToken) {
+    const refreshToken = params.get('refresh_token') || '';
+    if (accessToken) {
       try {
         await SupabaseDB.setSessionFromRecovery(accessToken, refreshToken);
-        // Clean URL so hash doesn't linger
         history.replaceState(null, '', window.location.pathname);
-        // Mark as logged in so we return to level select after password change
         localStorage.setItem('auth_user', JSON.stringify({ method:'email' }));
         showScreen('reset-password');
         return;
       } catch (err) {
         console.error('Recovery session failed:', err);
-        // Fall through to normal auth flow
+      }
+    }
+  }
+
+  // ── GOOGLE OAuth callback: handle access_token without type=recovery ──────
+  if (hash && hash.includes('access_token') && !hash.includes('type=recovery') && SupabaseDB.isConfigured()) {
+    const params = new URLSearchParams(hash.substring(1));
+    const accessToken  = params.get('access_token');
+    const refreshToken = params.get('refresh_token') || '';
+    if (accessToken) {
+      try {
+        await SupabaseDB.setSessionFromRecovery(accessToken, refreshToken);
+        history.replaceState(null, '', window.location.pathname);
+        localStorage.setItem('auth_user', JSON.stringify({ method:'supabase' }));
+        enterApp();
+        return;
+      } catch (err) {
+        console.error('Google OAuth session failed:', err);
       }
     }
   }
