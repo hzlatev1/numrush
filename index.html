@@ -9742,46 +9742,53 @@ async function initApp() {
   applyColours();
   applyLang();
 
-  // ── RECOVERY FLOW: check if URL contains recovery tokens ─────────────────
+  // ── RECOVERY & OAuth callback handling ─────────────────────────────────
   const hash = window.location.hash;
+  const search = window.location.search;
+  
+  // Check for query string code (newer Supabase format: ?code=...)
+  if (search && search.includes('code=') && SupabaseDB.isConfigured()) {
+    const sp = new URLSearchParams(search);
+    const code = sp.get('code');
+    if (code) {
+      try {
+        const res = await fetch(`${SupabaseDB.url}/auth/v1/token?grant_type=pkce`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'apikey': SupabaseDB.key },
+          body: JSON.stringify({ auth_code: code })
+        });
+        const data = await res.json();
+        if (data.access_token) {
+          await SupabaseDB.setSessionFromRecovery(data.access_token, data.refresh_token || '');
+          history.replaceState(null, '', window.location.pathname);
+          localStorage.setItem('auth_user', JSON.stringify({ method:'email' }));
+          showScreen('reset-password');
+          return;
+        }
+      } catch (err) { console.error('PKCE exchange failed:', err); }
+    }
+  }
+
+  // Check for hash with type=recovery (standard Supabase format)
   if (hash && hash.includes('type=recovery') && SupabaseDB.isConfigured()) {
     const params = new URLSearchParams(hash.substring(1));
-    const accessToken  = params.get('access_token');
+    const accessToken = params.get('access_token');
     const refreshToken = params.get('refresh_token') || '';
-    const otpEmail     = params.get('email') || '';
-    if (accessToken) {
+    if (accessToken && accessToken.length > 100) {
       try {
-        // Try OTP exchange first if token looks short (not a JWT)
-        if (accessToken.length < 100 && otpEmail) {
-          const res = await fetch(`${SupabaseDB.url}/auth/v1/verify`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'apikey': SupabaseDB.key },
-            body: JSON.stringify({ type: 'recovery', token: accessToken, email: otpEmail })
-          });
-          const data = await res.json();
-          if (data.access_token) {
-            await SupabaseDB.setSessionFromRecovery(data.access_token, data.refresh_token || '');
-            history.replaceState(null, '', window.location.pathname);
-            localStorage.setItem('auth_user', JSON.stringify({ method:'email' }));
-            showScreen('reset-password');
-            return;
-          }
-        }
         await SupabaseDB.setSessionFromRecovery(accessToken, refreshToken);
         history.replaceState(null, '', window.location.pathname);
         localStorage.setItem('auth_user', JSON.stringify({ method:'email' }));
         showScreen('reset-password');
         return;
-      } catch (err) {
-        console.error('Recovery session failed:', err);
-      }
+      } catch (err) { console.error('Recovery session failed:', err); }
     }
   }
 
-  // ── GOOGLE OAuth callback: handle access_token without type=recovery ──────
+  // Check for hash with access_token (Google OAuth callback)
   if (hash && hash.includes('access_token') && !hash.includes('type=recovery') && SupabaseDB.isConfigured()) {
     const params = new URLSearchParams(hash.substring(1));
-    const accessToken  = params.get('access_token');
+    const accessToken = params.get('access_token');
     const refreshToken = params.get('refresh_token') || '';
     if (accessToken) {
       try {
@@ -9790,10 +9797,16 @@ async function initApp() {
         localStorage.setItem('auth_user', JSON.stringify({ method:'supabase' }));
         enterApp();
         return;
-      } catch (err) {
-        console.error('Google OAuth session failed:', err);
-      }
+      } catch (err) { console.error('Google OAuth session failed:', err); }
     }
+  }
+  
+  // Check for error in hash (e.g., expired link)
+  if (hash && hash.includes('error=')) {
+    const params = new URLSearchParams(hash.substring(1));
+    const errorDesc = params.get('error_description') || params.get('error') || 'Unknown error';
+    alert('Reset link error: ' + decodeURIComponent(errorDesc.replace(/\+/g, ' ')));
+    history.replaceState(null, '', window.location.pathname);
   }
 
   // Try to restore Supabase session first
