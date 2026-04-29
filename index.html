@@ -3293,7 +3293,7 @@ const SupabaseDB = (() => {
 
   async function resetPassword(email) {
     // Redirect URL: after user clicks the reset link in email, they return here
-    const redirectTo = window.location.origin + window.location.pathname;
+    const redirectTo = 'https://hzlatev1.github.io/numrush/';
     console.log('[ResetPassword] Sending to:', email, 'redirect:', redirectTo);
     const res = await fetch(`${SUPABASE_URL}/auth/v1/recover`, {
       method: 'POST',
