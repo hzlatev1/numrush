@@ -3587,6 +3587,8 @@ const SupabaseDB = (() => {
     get userId()    { return _userId; },
     get isLoggedIn(){ return !!_accessToken; },
     get userEmail() { return _userEmail; },
+    get url()       { return SUPABASE_URL; },
+    get key()       { return SUPABASE_ANON_KEY; },
     isConfigured()  { return SUPABASE_URL !== 'YOUR_SUPABASE_URL'; },
   };
 })();
@@ -9746,8 +9748,25 @@ async function initApp() {
     const params = new URLSearchParams(hash.substring(1));
     const accessToken  = params.get('access_token');
     const refreshToken = params.get('refresh_token') || '';
+    const otpEmail     = params.get('email') || '';
     if (accessToken) {
       try {
+        // Try OTP exchange first if token looks short (not a JWT)
+        if (accessToken.length < 100 && otpEmail) {
+          const res = await fetch(`${SupabaseDB.url}/auth/v1/verify`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'apikey': SupabaseDB.key },
+            body: JSON.stringify({ type: 'recovery', token: accessToken, email: otpEmail })
+          });
+          const data = await res.json();
+          if (data.access_token) {
+            await SupabaseDB.setSessionFromRecovery(data.access_token, data.refresh_token || '');
+            history.replaceState(null, '', window.location.pathname);
+            localStorage.setItem('auth_user', JSON.stringify({ method:'email' }));
+            showScreen('reset-password');
+            return;
+          }
+        }
         await SupabaseDB.setSessionFromRecovery(accessToken, refreshToken);
         history.replaceState(null, '', window.location.pathname);
         localStorage.setItem('auth_user', JSON.stringify({ method:'email' }));
