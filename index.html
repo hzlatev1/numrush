@@ -3251,7 +3251,7 @@ const SupabaseDB = (() => {
       _userId       = data.user?.id;
       _userEmail    = data.user?.email;
       localStorage.setItem('sb_session', JSON.stringify({ refresh_token: _refreshToken }));
-      return true;
+      return data.user || true;
     } catch { return false; }
   }
 
@@ -3643,6 +3643,18 @@ const SupabaseDB = (() => {
     return Array.isArray(data) ? data : [];
   }
 
+  // Remove a friend bidirectionally — deletes both forward and reverse rows.
+  async function removeFriend(friendCode) {
+    if (!_userId) return null;
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/remove_friend_by_code`, {
+      method: 'POST',
+      headers: { ...headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_code: friendCode })
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  }
+
   async function syncFriendsToDB(friendCodes) {
     if (!_userId || friendCodes.length === 0) return [];
     // Resolve codes → player IDs
@@ -3703,7 +3715,7 @@ const SupabaseDB = (() => {
     upsertScore, getLeaderboard, getSurvivalLeaderboard,
     upsertDailyResult, getDailyLeaderboard, getDailyFriendResults,
     syncFriendsToDB, refreshFriendsData, getFriendIds,
-    sendFriendRequest, acceptFriendRequest, declineFriendRequest, getIncomingRequests,
+    sendFriendRequest, acceptFriendRequest, declineFriendRequest, getIncomingRequests, removeFriend,
     get userId()    { return _userId; },
     get isLoggedIn(){ return !!_accessToken; },
     get userEmail() { return _userEmail; },
@@ -5123,8 +5135,11 @@ function buildProfileFriends() {
     const row = document.createElement('div');
     row.className = 'friend-row';
     const initial = (f.name || f.code || '?')[0].toUpperCase();
+    const avatarHTML = f.avatar
+      ? `<img src="${f.avatar}" style="width:100%;height:100%;border-radius:50%;object-fit:cover;" alt="">`
+      : initial;
     row.innerHTML = `
-      <div class="friend-avatar">${initial}</div>
+      <div class="friend-avatar">${avatarHTML}</div>
       <div class="friend-info">
         <div class="friend-name">${f.name || 'Player'}</div>
         <div class="friend-code-tag">#${f.code}</div>
@@ -5141,6 +5156,10 @@ function buildProfileFriends() {
         Friends.splice(idx, 1);
         localStorage.setItem('friends', JSON.stringify(Friends));
         buildProfileFriends();
+        // Also remove from DB so re-adding works correctly (deletes both directions)
+        if (SupabaseDB.isConfigured() && SupabaseDB.isLoggedIn) {
+          SupabaseDB.removeFriend(f.code).catch(() => {});
+        }
       }
     });
     el.appendChild(row);
@@ -10167,7 +10186,7 @@ async function initApp() {
     const refreshToken = params.get('refresh_token') || '';
     if (accessToken) {
       try {
-        await SupabaseDB.setSessionFromRecovery(accessToken, refreshToken);
+        const user = await SupabaseDB.setSessionFromRecovery(accessToken, refreshToken);
 
         // Pull existing player record from DB and sync local Profile.
         // CRITICAL: Supabase auto-links Google identity to existing email/password
@@ -10176,7 +10195,23 @@ async function initApp() {
         try {
           const existingPlayer = await SupabaseDB.getPlayerById(SupabaseDB.userId);
           if (existingPlayer) {
-            if (existingPlayer.username)    localStorage.setItem('profile_name',   existingPlayer.username);
+            // If DB has username — use it. Otherwise derive a fallback from
+            // Google metadata so the user doesn't see "Tap to set name".
+            let derivedUsername = existingPlayer.username;
+            if (!derivedUsername) {
+              const meta = user?.user_metadata || {};
+              derivedUsername = meta.full_name || meta.name || meta.user_name
+                             || (user?.email ? user.email.split('@')[0] : null);
+              // Persist the derived username to DB so it sticks across devices
+              if (derivedUsername) {
+                await SupabaseDB.upsertPlayer(
+                  derivedUsername,
+                  existingPlayer.friend_code,
+                  existingPlayer.avatar_url
+                ).catch(() => {});
+              }
+            }
+            if (derivedUsername)            localStorage.setItem('profile_name',   derivedUsername);
             if (existingPlayer.friend_code) localStorage.setItem('profile_code',   existingPlayer.friend_code);
             if (existingPlayer.avatar_url)  localStorage.setItem('profile_avatar', existingPlayer.avatar_url);
             // Refresh in-memory Profile from the freshly synced localStorage
@@ -10192,6 +10227,14 @@ async function initApp() {
               for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
               localStorage.setItem('profile_code', code);
               Profile.code = code;
+            }
+            // Derive username from Google metadata for first-time signup
+            const meta = user?.user_metadata || {};
+            const derived = meta.full_name || meta.name || meta.user_name
+                          || (user?.email ? user.email.split('@')[0] : null);
+            if (derived) {
+              Profile.name = derived;
+              localStorage.setItem('profile_name', derived);
             }
             await SupabaseDB.upsertPlayer(
               Profile.name || null,
@@ -10222,13 +10265,27 @@ async function initApp() {
     const restored = await SupabaseDB.restoreSession();
     if (restored) {
       localStorage.setItem('auth_user', JSON.stringify({ method:'supabase' }));
+      // restoreSession returns the user object on success — use it for metadata
+      const restoredUser = (typeof restored === 'object') ? restored : null;
       // Sync Profile from DB — handles case where this device has stale or
-      // missing profile data but DB has the source of truth (e.g. user logged
-      // in here previously but updated name/avatar on another device).
+      // missing profile data but DB has the source of truth.
       try {
         const player = await SupabaseDB.getPlayerById(SupabaseDB.userId);
         if (player) {
-          if (player.username)    localStorage.setItem('profile_name',   player.username);
+          let derivedUsername = player.username;
+          if (!derivedUsername && restoredUser) {
+            const meta = restoredUser.user_metadata || {};
+            derivedUsername = meta.full_name || meta.name || meta.user_name
+                           || (restoredUser.email ? restoredUser.email.split('@')[0] : null);
+            if (derivedUsername) {
+              await SupabaseDB.upsertPlayer(
+                derivedUsername,
+                player.friend_code,
+                player.avatar_url
+              ).catch(() => {});
+            }
+          }
+          if (derivedUsername)    localStorage.setItem('profile_name',   derivedUsername);
           if (player.friend_code) localStorage.setItem('profile_code',   player.friend_code);
           if (player.avatar_url)  localStorage.setItem('profile_avatar', player.avatar_url);
           Profile.name   = localStorage.getItem('profile_name')   || '';
