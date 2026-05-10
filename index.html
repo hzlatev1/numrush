@@ -2151,6 +2151,49 @@
     letter-spacing: 1px; text-align: center;
     padding: 16px 0;
   }
+  /* Friend requests */
+  .request-row {
+    display: flex; align-items: center; gap: 10px;
+    background: linear-gradient(180deg, rgba(255,90,40,0.08), rgba(255,90,40,0.03));
+    border: 1px solid rgba(255,90,40,0.25);
+    border-radius: 12px;
+    padding: 10px 12px;
+  }
+  .request-actions {
+    display: flex; gap: 6px; flex-shrink: 0;
+  }
+  .request-btn {
+    border: none; cursor: pointer;
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    transition: transform 0.1s, opacity 0.15s;
+    padding: 0;
+  }
+  .request-btn:active { transform: scale(0.92); }
+  .request-btn:disabled { opacity: 0.4; cursor: default; }
+  .request-btn.accept { background: var(--accent); color: #000; }
+  .request-btn.decline {
+    background: rgba(255,255,255,0.05);
+    color: #888;
+    border: 1px solid rgba(255,255,255,0.1);
+  }
+  /* Notification badge on profile button */
+  #btn-profile { position: relative; }
+  .profile-badge {
+    position: absolute;
+    top: 4px; right: 4px;
+    min-width: 16px; height: 16px;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #000;
+    font-size: 10px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    padding: 0 4px;
+    border: 2px solid var(--bg);
+    pointer-events: none;
+  }
+  .profile-badge.hidden { display: none; }
 
   /* Profile section title */
   .profile-section-title {
@@ -2795,6 +2838,7 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
       </svg>
+      <span class="profile-badge hidden" id="profile-badge">0</span>
     </button>
     <!-- Leaderboard -->
     <button class="settings-btn" id="btn-leaderboard" title="Leaderboard">
@@ -2950,6 +2994,10 @@
         COPY
       </button>
     </div>
+
+    <!-- Friend requests (incoming) — hidden when none -->
+    <div class="profile-section-title hidden" id="requests-section-title" data-i18n="friendRequests">FRIEND REQUESTS</div>
+    <div class="friends-list" id="profile-requests-list"></div>
 
     <!-- Friends list -->
     <div class="profile-section-title" data-i18n="friends">FRIENDS</div>
@@ -3280,6 +3328,8 @@ const SupabaseDB = (() => {
     localStorage.removeItem('profile_avatar');
     localStorage.removeItem('profile_code'); // will be regenerated
     localStorage.removeItem('auth_user');
+    // Clear friends — they belong to the previous account, NOT the next one
+    localStorage.removeItem('friends');
   }
 
   async function signInWithGoogle() {
@@ -3544,6 +3594,55 @@ const SupabaseDB = (() => {
   }
 
   // ── Friends ─────────────────────────────────────────────────────────────
+  // Friend request flow (Facebook/Discord style):
+  // A sends request → B sees it → B accepts/declines → friendship created.
+  // RPCs are SECURITY DEFINER so they bypass RLS safely with auth checks.
+
+  async function sendFriendRequest(code) {
+    if (!_userId) return null;
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/send_friend_request`, {
+      method: 'POST',
+      headers: { ...headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_code: code })
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  }
+
+  async function acceptFriendRequest(requestId) {
+    if (!_userId) return null;
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/accept_friend_request`, {
+      method: 'POST',
+      headers: { ...headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ request_id: requestId })
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  }
+
+  async function declineFriendRequest(requestId) {
+    if (!_userId) return null;
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/decline_friend_request`, {
+      method: 'POST',
+      headers: { ...headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ request_id: requestId })
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  }
+
+  async function getIncomingRequests() {
+    if (!_userId) return [];
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_incoming_requests`, {
+      method: 'POST',
+      headers: { ...headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  }
+
   async function syncFriendsToDB(friendCodes) {
     if (!_userId || friendCodes.length === 0) return [];
     // Resolve codes → player IDs
@@ -3604,6 +3703,7 @@ const SupabaseDB = (() => {
     upsertScore, getLeaderboard, getSurvivalLeaderboard,
     upsertDailyResult, getDailyLeaderboard, getDailyFriendResults,
     syncFriendsToDB, refreshFriendsData, getFriendIds,
+    sendFriendRequest, acceptFriendRequest, declineFriendRequest, getIncomingRequests,
     get userId()    { return _userId; },
     get isLoggedIn(){ return !!_accessToken; },
     get userEmail() { return _userEmail; },
@@ -5126,9 +5226,34 @@ document.getElementById('avatar-input').addEventListener('change', e => {
   if (!file) return;
   const reader = new FileReader();
   reader.onload = ev => {
-    Profile.avatar = ev.target.result;
-    saveProfile();
-    buildProfile();
+    // Compress avatar: resize to max 256x256 and re-encode as JPEG.
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 256;
+      let w = img.width, h = img.height;
+      if (w > h) { if (w > MAX) { h = h * MAX / w; w = MAX; } }
+      else       { if (h > MAX) { w = w * MAX / h; h = MAX; } }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      Profile.avatar = canvas.toDataURL('image/jpeg', 0.85);
+      saveProfile();
+      buildProfile();
+      const isLoggedIn = localStorage.getItem('auth_user');
+      if (isLoggedIn && SupabaseDB.isConfigured() && SupabaseDB.isLoggedIn) {
+        SupabaseDB.upsertPlayer(Profile.name || null, Profile.code, Profile.avatar).catch(() => {});
+      }
+    };
+    img.onerror = () => {
+      Profile.avatar = ev.target.result;
+      saveProfile();
+      buildProfile();
+      const isLoggedIn = localStorage.getItem('auth_user');
+      if (isLoggedIn && SupabaseDB.isConfigured() && SupabaseDB.isLoggedIn) {
+        SupabaseDB.upsertPlayer(Profile.name || null, Profile.code, Profile.avatar).catch(() => {});
+      }
+    };
+    img.src = ev.target.result;
   };
   reader.readAsDataURL(file);
 });
@@ -5342,6 +5467,7 @@ document.getElementById('btn-profile').addEventListener('click', () => {
   buildProfile();
   applyLang();
   showScreen('profile');
+  loadFriendRequests();
 });
 document.getElementById('btn-profile-back').addEventListener('click', () => {
   setActiveNavBtn(null);
@@ -5644,7 +5770,7 @@ document.getElementById('btn-add-friend').addEventListener('click', async () => 
   const code = document.getElementById('friend-code-input').value.trim().toUpperCase();
   if (!code || code.length < 4) return;
 
-  // Check if already added
+  // Already friends or own code? Just clear the input.
   if (Friends.find(f => f.code === code) || code === Profile.code) {
     document.getElementById('friend-code-input').value = '';
     return;
@@ -5652,43 +5778,190 @@ document.getElementById('btn-add-friend').addEventListener('click', async () => 
 
   const input = document.getElementById('friend-code-input');
   const btn   = document.getElementById('btn-add-friend');
+  const origBtnText = btn.textContent;
 
-  // Try to fetch real player data from Supabase first
-  let player = null;
-  if (SupabaseDB.isConfigured() && SupabaseDB.isLoggedIn) {
-    btn.disabled = true;
-    try {
-      player = await SupabaseDB.getPlayerByFriendCode(code);
-    } catch (e) {
-      console.warn('[NumRush] getPlayerByFriendCode failed:', e);
-    }
-    btn.disabled = false;
-  }
-
-  if (!player) {
-    // Player not found in DB — show subtle feedback and abort
-    input.style.transition = 'background-color 0.3s';
-    const prevBg = input.style.backgroundColor;
-    input.style.backgroundColor = 'rgba(255,80,80,0.2)';
-    setTimeout(() => { input.style.backgroundColor = prevBg; }, 600);
+  if (!SupabaseDB.isConfigured() || !SupabaseDB.isLoggedIn) {
     return;
   }
 
-  // Add with REAL data from server
-  Friends.push({
-    name:   player.username || ('Player ' + code),
-    code:   player.friend_code,
-    avatar: player.avatar_url || '',
-    times:  {}
-  });
-  localStorage.setItem('friends', JSON.stringify(Friends));
+  btn.disabled = true;
+  let result = null;
+  try {
+    result = await SupabaseDB.sendFriendRequest(code);
+  } catch (e) {
+    console.warn('[NumRush] sendFriendRequest failed:', e);
+  }
 
-  // Persist friendship to Supabase (bidirectional — see syncFriendsToDB)
-  SupabaseDB.syncFriendsToDB([code]).catch(() => {});
+  const flash = (color, btnText) => {
+    input.style.transition = 'background-color 0.4s';
+    input.style.backgroundColor = color;
+    btn.textContent = btnText;
+    setTimeout(() => {
+      input.style.backgroundColor = '';
+      btn.textContent = origBtnText;
+      btn.disabled = false;
+    }, 1400);
+  };
 
+  if (!result || result.error) {
+    flash('rgba(255,80,80,0.25)', '✕');
+    return;
+  }
+
+  // Auto-accepted: target already had a request from us — instantly friends
+  if (result.status === 'auto_accepted' && result.player) {
+    Friends.push({
+      name:   result.player.username || ('Player ' + code),
+      code:   result.player.friend_code,
+      avatar: result.player.avatar_url || '',
+      times:  {}
+    });
+    localStorage.setItem('friends', JSON.stringify(Friends));
+    input.value = '';
+    renderLbList();
+    flash('rgba(80,255,120,0.25)', '✓');
+    return;
+  }
+
+  if (result.status === 'already_friends') {
+    input.value = '';
+    flash('rgba(80,255,120,0.15)', '✓');
+    return;
+  }
+
+  // Pending: request sent, waiting for accept
   input.value = '';
-  renderLbList();
+  flash('rgba(80,180,255,0.25)', '✓ Sent');
 });
+
+// ── Friend requests: load, render, accept, decline ──────────────────────
+let _pendingRequests = [];
+
+async function loadFriendRequests() {
+  if (!SupabaseDB.isConfigured() || !SupabaseDB.isLoggedIn) {
+    _pendingRequests = [];
+    updateRequestsBadge();
+    return;
+  }
+  try {
+    _pendingRequests = await SupabaseDB.getIncomingRequests();
+  } catch (e) {
+    console.warn('[NumRush] loadFriendRequests failed:', e);
+    _pendingRequests = [];
+  }
+  updateRequestsBadge();
+  renderRequestsList();
+}
+
+function updateRequestsBadge() {
+  const badge = document.getElementById('profile-badge');
+  if (!badge) return;
+  const count = _pendingRequests.length;
+  if (count === 0) {
+    badge.classList.add('hidden');
+  } else {
+    badge.classList.remove('hidden');
+    badge.textContent = count > 9 ? '9+' : String(count);
+  }
+}
+
+function renderRequestsList() {
+  const listEl  = document.getElementById('profile-requests-list');
+  const titleEl = document.getElementById('requests-section-title');
+  if (!listEl) return;
+  listEl.innerHTML = '';
+
+  if (_pendingRequests.length === 0) {
+    titleEl?.classList.add('hidden');
+    return;
+  }
+  titleEl?.classList.remove('hidden');
+
+  _pendingRequests.forEach(req => {
+    const row = document.createElement('div');
+    row.className = 'request-row';
+
+    const av = document.createElement('div');
+    av.className = 'friend-avatar';
+    if (req.avatar_url) {
+      const img = document.createElement('img');
+      img.src = req.avatar_url;
+      img.style.cssText = 'width:100%;height:100%;border-radius:50%;object-fit:cover;';
+      av.appendChild(img);
+    } else {
+      av.textContent = (req.username || req.friend_code || '?')[0].toUpperCase();
+    }
+
+    const info = document.createElement('div');
+    info.className = 'friend-info';
+    const nm = document.createElement('div');
+    nm.className = 'friend-name';
+    nm.textContent = req.username || ('Player ' + req.friend_code);
+    const tag = document.createElement('div');
+    tag.className = 'friend-code-tag';
+    tag.textContent = '#' + req.friend_code;
+    info.appendChild(nm);
+    info.appendChild(tag);
+
+    const actions = document.createElement('div');
+    actions.className = 'request-actions';
+
+    const acceptBtn = document.createElement('button');
+    acceptBtn.className = 'request-btn accept';
+    acceptBtn.title = 'Accept';
+    acceptBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+    acceptBtn.onclick = () => handleAcceptRequest(req, row);
+
+    const declineBtn = document.createElement('button');
+    declineBtn.className = 'request-btn decline';
+    declineBtn.title = 'Decline';
+    declineBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+    declineBtn.onclick = () => handleDeclineRequest(req, row);
+
+    actions.appendChild(acceptBtn);
+    actions.appendChild(declineBtn);
+
+    row.appendChild(av);
+    row.appendChild(info);
+    row.appendChild(actions);
+    listEl.appendChild(row);
+  });
+}
+
+async function handleAcceptRequest(req, rowEl) {
+  rowEl.querySelectorAll('button').forEach(b => b.disabled = true);
+  const result = await SupabaseDB.acceptFriendRequest(req.id);
+  if (result?.status === 'accepted' && result.player) {
+    if (!Friends.find(f => f.code === result.player.friend_code)) {
+      Friends.push({
+        name:   result.player.username || ('Player ' + result.player.friend_code),
+        code:   result.player.friend_code,
+        avatar: result.player.avatar_url || '',
+        times:  {}
+      });
+      localStorage.setItem('friends', JSON.stringify(Friends));
+    }
+    _pendingRequests = _pendingRequests.filter(r => r.id !== req.id);
+    updateRequestsBadge();
+    renderRequestsList();
+    buildProfile();
+    try { renderLbList(); } catch (e) {}
+  } else {
+    rowEl.querySelectorAll('button').forEach(b => b.disabled = false);
+  }
+}
+
+async function handleDeclineRequest(req, rowEl) {
+  rowEl.querySelectorAll('button').forEach(b => b.disabled = true);
+  const result = await SupabaseDB.declineFriendRequest(req.id);
+  if (result?.status === 'declined') {
+    _pendingRequests = _pendingRequests.filter(r => r.id !== req.id);
+    updateRequestsBadge();
+    renderRequestsList();
+  } else {
+    rowEl.querySelectorAll('button').forEach(b => b.disabled = false);
+  }
+}
 
 // Nav
 document.getElementById('btn-leaderboard').addEventListener('click', () => {
@@ -9461,21 +9734,26 @@ document.querySelectorAll('.ob-dot').forEach(d => {
 // ══════════════ AUTH ══════════════
 
 async function enterApp() {
-  // Sync profile to Supabase (fire-and-forget)
   if (SupabaseDB.isLoggedIn && SupabaseDB.isConfigured()) {
-    SupabaseDB.upsertPlayer(Profile.name, Profile.code, Profile.avatar).catch(() => {});
+    // Only upsert with non-empty values — never overwrite DB data with empty
+    if (Profile.name || Profile.avatar) {
+      SupabaseDB.upsertPlayer(
+        Profile.name   || null,
+        Profile.code,
+        Profile.avatar || null
+      ).catch(() => {});
+    }
 
-    // Sync friends — pull bidirectional friendships from DB and refresh local data
+    // Sync friends — pull friend list from DB and refresh local data
     (async () => {
       try {
-        // 1. Pull friend_ids from DB (includes friends added by the OTHER side)
-        const friendIds = await SupabaseDB.getFriendIds();
+        let friendIds = await SupabaseDB.getFriendIds();
+        // SAFETY: never treat self as a friend
+        friendIds = friendIds.filter(id => id !== SupabaseDB.userId);
 
-        // 2. Resolve all known codes — local + remote
-        const localCodes  = Friends.map(f => f.code).filter(Boolean);
-        const allCodes    = new Set(localCodes);
+        const localCodes = Friends.map(f => f.code).filter(c => c && c !== Profile.code);
+        const allCodes   = new Set(localCodes);
 
-        // If we have remote friend IDs not yet in local list, fetch their codes
         if (friendIds.length > 0) {
           const idList = friendIds.map(id => `"${id}"`).join(',');
           const res = await fetch(
@@ -9488,16 +9766,10 @@ async function enterApp() {
           }
         }
 
-        // 3. Persist local-only friendships to DB (bidirectional)
-        if (localCodes.length > 0) {
-          await SupabaseDB.syncFriendsToDB(localCodes);
-        }
-
-        // 4. Refresh ALL friends with fresh username/avatar
+        // Refresh local Friends with fresh username/avatar from server
         if (allCodes.size > 0) {
           const fresh = await SupabaseDB.refreshFriendsData([...allCodes]);
           if (fresh && fresh.length > 0) {
-            // Build new Friends array preserving local 'times' data
             const merged = fresh.map(p => {
               const existing = Friends.find(f => f.code === p.friend_code);
               return {
@@ -9507,11 +9779,9 @@ async function enterApp() {
                 times:  existing?.times || {}
               };
             });
-            // Replace contents in place (Friends is `const`)
             Friends.length = 0;
             merged.forEach(f => Friends.push(f));
             localStorage.setItem('friends', JSON.stringify(Friends));
-            // Re-render leaderboard if visible
             try { renderLbList(); } catch(e) {}
           }
         }
@@ -9519,6 +9789,9 @@ async function enterApp() {
         console.warn('[NumRush] friends sync failed:', e);
       }
     })();
+
+    // Load pending friend requests for badge display
+    loadFriendRequests().catch(() => {});
   }
   buildLevelSelect();
   applyColours();
