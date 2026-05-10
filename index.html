@@ -2654,7 +2654,7 @@
 
 <!-- ══════════════ LEVEL SELECT ══════════════ -->
 <!-- ══════════════ ONBOARDING ══════════════ -->
-<div id="screen-onboarding" class="screen active">
+<div id="screen-onboarding" class="screen">
   <div class="ob-wrap">
 
     <!-- Slides -->
@@ -5481,12 +5481,41 @@ document.getElementById('btn-delete-confirm')?.addEventListener('click', async (
 });
 
 
-document.getElementById('btn-profile').addEventListener('click', () => {
+document.getElementById('btn-profile').addEventListener('click', async () => {
   setActiveNavBtn('btn-profile');
+  // Render immediately with cached data (instant feedback)
   buildProfile();
   applyLang();
   showScreen('profile');
   loadFriendRequests();
+  // Then refresh from DB in the background and re-render if anything changed
+  if (SupabaseDB.isConfigured() && SupabaseDB.isLoggedIn) {
+    try {
+      const player = await SupabaseDB.getPlayerById(SupabaseDB.userId);
+      if (player) {
+        let changed = false;
+        if (player.username && player.username !== Profile.name) {
+          Profile.name = player.username;
+          localStorage.setItem('profile_name', player.username);
+          changed = true;
+        }
+        if (player.avatar_url && player.avatar_url !== Profile.avatar) {
+          Profile.avatar = player.avatar_url;
+          localStorage.setItem('profile_avatar', player.avatar_url);
+          changed = true;
+        }
+        if (player.friend_code && player.friend_code !== Profile.code) {
+          Profile.code = player.friend_code;
+          localStorage.setItem('profile_code', player.friend_code);
+          changed = true;
+        }
+        if (changed) {
+          buildProfile();
+          applyLang();
+        }
+      }
+    } catch (e) { console.warn('[NumRush] Profile refresh failed:', e); }
+  }
 });
 document.getElementById('btn-profile-back').addEventListener('click', () => {
   setActiveNavBtn(null);
