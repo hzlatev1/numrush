@@ -3555,15 +3555,35 @@ const SupabaseDB = (() => {
     if (!res.ok) return [];
     const players = await res.json();
 
-    // Upsert friendships
+    // Upsert friendships — BIDIRECTIONAL (both rows so each side sees the other)
     for (const p of players) {
+      // Forward: me -> friend
       await fetch(`${SUPABASE_URL}/rest/v1/friendships`, {
         method: 'POST',
         headers: { ...headers(), 'Prefer': 'resolution=ignore-duplicates,return=minimal' },
         body: JSON.stringify({ player_id: _userId, friend_id: p.id })
       });
+      // Reverse: friend -> me  (so the other side sees us in their friends list)
+      await fetch(`${SUPABASE_URL}/rest/v1/friendships`, {
+        method: 'POST',
+        headers: { ...headers(), 'Prefer': 'resolution=ignore-duplicates,return=minimal' },
+        body: JSON.stringify({ player_id: p.id, friend_id: _userId })
+      });
     }
     return players;
+  }
+
+  // Refresh local Friends array with fresh username/avatar from server.
+  // Returns updated array of friend objects ready to assign to window.Friends.
+  async function refreshFriendsData(friendCodes) {
+    if (!_userId || friendCodes.length === 0) return [];
+    const codeList = friendCodes.map(c => `"${c}"`).join(',');
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/players?friend_code=in.(${codeList})&select=id,username,friend_code,avatar_url`,
+      { headers: headers() }
+    );
+    if (!res.ok) return [];
+    return await res.json();
   }
 
   async function getFriendIds() {
@@ -3583,7 +3603,7 @@ const SupabaseDB = (() => {
     upsertPlayer, getPlayerByFriendCode, getPlayerByUsername, getPlayerById,
     upsertScore, getLeaderboard, getSurvivalLeaderboard,
     upsertDailyResult, getDailyLeaderboard, getDailyFriendResults,
-    syncFriendsToDB, getFriendIds,
+    syncFriendsToDB, refreshFriendsData, getFriendIds,
     get userId()    { return _userId; },
     get isLoggedIn(){ return !!_accessToken; },
     get userEmail() { return _userEmail; },
@@ -5620,7 +5640,7 @@ document.querySelectorAll('.lb-tab').forEach(btn => {
 });
 
 // Add friend by code
-document.getElementById('btn-add-friend').addEventListener('click', () => {
+document.getElementById('btn-add-friend').addEventListener('click', async () => {
   const code = document.getElementById('friend-code-input').value.trim().toUpperCase();
   if (!code || code.length < 4) return;
 
@@ -5630,11 +5650,43 @@ document.getElementById('btn-add-friend').addEventListener('click', () => {
     return;
   }
 
-  // Add as placeholder — real data will load from Supabase when available
-  Friends.push({ name: 'Player ' + code, code, avatar: '', times: {} });
+  const input = document.getElementById('friend-code-input');
+  const btn   = document.getElementById('btn-add-friend');
 
+  // Try to fetch real player data from Supabase first
+  let player = null;
+  if (SupabaseDB.isConfigured() && SupabaseDB.isLoggedIn) {
+    btn.disabled = true;
+    try {
+      player = await SupabaseDB.getPlayerByFriendCode(code);
+    } catch (e) {
+      console.warn('[NumRush] getPlayerByFriendCode failed:', e);
+    }
+    btn.disabled = false;
+  }
+
+  if (!player) {
+    // Player not found in DB — show subtle feedback and abort
+    input.style.transition = 'background-color 0.3s';
+    const prevBg = input.style.backgroundColor;
+    input.style.backgroundColor = 'rgba(255,80,80,0.2)';
+    setTimeout(() => { input.style.backgroundColor = prevBg; }, 600);
+    return;
+  }
+
+  // Add with REAL data from server
+  Friends.push({
+    name:   player.username || ('Player ' + code),
+    code:   player.friend_code,
+    avatar: player.avatar_url || '',
+    times:  {}
+  });
   localStorage.setItem('friends', JSON.stringify(Friends));
-  document.getElementById('friend-code-input').value = '';
+
+  // Persist friendship to Supabase (bidirectional — see syncFriendsToDB)
+  SupabaseDB.syncFriendsToDB([code]).catch(() => {});
+
+  input.value = '';
   renderLbList();
 });
 
@@ -9412,11 +9464,61 @@ async function enterApp() {
   // Sync profile to Supabase (fire-and-forget)
   if (SupabaseDB.isLoggedIn && SupabaseDB.isConfigured()) {
     SupabaseDB.upsertPlayer(Profile.name, Profile.code, Profile.avatar).catch(() => {});
-    // Sync friends list
-    const codes = Friends.map(f => f.code).filter(Boolean);
-    if (codes.length > 0) {
-      SupabaseDB.syncFriendsToDB(codes).catch(() => {});
-    }
+
+    // Sync friends — pull bidirectional friendships from DB and refresh local data
+    (async () => {
+      try {
+        // 1. Pull friend_ids from DB (includes friends added by the OTHER side)
+        const friendIds = await SupabaseDB.getFriendIds();
+
+        // 2. Resolve all known codes — local + remote
+        const localCodes  = Friends.map(f => f.code).filter(Boolean);
+        const allCodes    = new Set(localCodes);
+
+        // If we have remote friend IDs not yet in local list, fetch their codes
+        if (friendIds.length > 0) {
+          const idList = friendIds.map(id => `"${id}"`).join(',');
+          const res = await fetch(
+            `${SupabaseDB.url}/rest/v1/players?id=in.(${idList})&select=id,username,friend_code,avatar_url`,
+            { headers: { 'apikey': SupabaseDB.key, 'Authorization': `Bearer ${SupabaseDB.key}` } }
+          );
+          if (res.ok) {
+            const remotePlayers = await res.json();
+            remotePlayers.forEach(p => { if (p.friend_code) allCodes.add(p.friend_code); });
+          }
+        }
+
+        // 3. Persist local-only friendships to DB (bidirectional)
+        if (localCodes.length > 0) {
+          await SupabaseDB.syncFriendsToDB(localCodes);
+        }
+
+        // 4. Refresh ALL friends with fresh username/avatar
+        if (allCodes.size > 0) {
+          const fresh = await SupabaseDB.refreshFriendsData([...allCodes]);
+          if (fresh && fresh.length > 0) {
+            // Build new Friends array preserving local 'times' data
+            const merged = fresh.map(p => {
+              const existing = Friends.find(f => f.code === p.friend_code);
+              return {
+                name:   p.username || ('Player ' + p.friend_code),
+                code:   p.friend_code,
+                avatar: p.avatar_url || '',
+                times:  existing?.times || {}
+              };
+            });
+            // Replace contents in place (Friends is `const`)
+            Friends.length = 0;
+            merged.forEach(f => Friends.push(f));
+            localStorage.setItem('friends', JSON.stringify(Friends));
+            // Re-render leaderboard if visible
+            try { renderLbList(); } catch(e) {}
+          }
+        }
+      } catch (e) {
+        console.warn('[NumRush] friends sync failed:', e);
+      }
+    })();
   }
   buildLevelSelect();
   applyColours();
@@ -9793,6 +9895,39 @@ async function initApp() {
     if (accessToken) {
       try {
         await SupabaseDB.setSessionFromRecovery(accessToken, refreshToken);
+
+        // Pull existing player record from DB and sync local Profile.
+        // CRITICAL: Supabase auto-links Google identity to existing email/password
+        // user with same email, so this user_id may already have a player row
+        // with username/avatar/friend_code we need to restore.
+        try {
+          const existingPlayer = await SupabaseDB.getPlayerById(SupabaseDB.userId);
+          if (existingPlayer) {
+            if (existingPlayer.username)    localStorage.setItem('profile_name',   existingPlayer.username);
+            if (existingPlayer.friend_code) localStorage.setItem('profile_code',   existingPlayer.friend_code);
+            if (existingPlayer.avatar_url)  localStorage.setItem('profile_avatar', existingPlayer.avatar_url);
+            // Refresh in-memory Profile from the freshly synced localStorage
+            Profile.name   = localStorage.getItem('profile_name')   || '';
+            Profile.avatar = localStorage.getItem('profile_avatar') || '';
+            Profile.code   = localStorage.getItem('profile_code')   || Profile.code;
+          } else {
+            // First Google login (no existing player row) — ensure friend_code exists,
+            // then create the player row so leaderboard/friends work immediately.
+            if (!localStorage.getItem('profile_code')) {
+              const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+              let code = '';
+              for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+              localStorage.setItem('profile_code', code);
+              Profile.code = code;
+            }
+            await SupabaseDB.upsertPlayer(
+              Profile.name || null,
+              Profile.code,
+              Profile.avatar || null
+            ).catch(() => {});
+          }
+        } catch (e) { console.warn('[NumRush] Profile sync after Google login failed:', e); }
+
         history.replaceState(null, '', window.location.pathname);
         localStorage.setItem('auth_user', JSON.stringify({ method:'supabase' }));
         enterApp();
@@ -9814,6 +9949,20 @@ async function initApp() {
     const restored = await SupabaseDB.restoreSession();
     if (restored) {
       localStorage.setItem('auth_user', JSON.stringify({ method:'supabase' }));
+      // Sync Profile from DB — handles case where this device has stale or
+      // missing profile data but DB has the source of truth (e.g. user logged
+      // in here previously but updated name/avatar on another device).
+      try {
+        const player = await SupabaseDB.getPlayerById(SupabaseDB.userId);
+        if (player) {
+          if (player.username)    localStorage.setItem('profile_name',   player.username);
+          if (player.friend_code) localStorage.setItem('profile_code',   player.friend_code);
+          if (player.avatar_url)  localStorage.setItem('profile_avatar', player.avatar_url);
+          Profile.name   = localStorage.getItem('profile_name')   || '';
+          Profile.avatar = localStorage.getItem('profile_avatar') || '';
+          Profile.code   = localStorage.getItem('profile_code')   || Profile.code;
+        }
+      } catch (e) { console.warn('[NumRush] Profile sync on restore failed:', e); }
     }
   }
 
