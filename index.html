@@ -3330,6 +3330,22 @@ const SupabaseDB = (() => {
     localStorage.removeItem('auth_user');
     // Clear friends — they belong to the previous account, NOT the next one
     localStorage.removeItem('friends');
+    // Clear game progress cache — will be re-fetched from DB on next sign in.
+    // (DB is the source of truth; localStorage is just a cache for offline play.)
+    localStorage.removeItem('best_scores');
+    localStorage.removeItem('best_times');
+    localStorage.removeItem('profile_games');
+    localStorage.removeItem('profile_wins');
+    localStorage.removeItem('profile_streak');
+    if (typeof State !== 'undefined') {
+      State.bestScores = {};
+      State.bestTimes  = {};
+    }
+    if (typeof Profile !== 'undefined') {
+      Profile.games  = 0;
+      Profile.wins   = 0;
+      Profile.streak = 0;
+    }
   }
 
   async function signInWithGoogle() {
@@ -3530,6 +3546,50 @@ const SupabaseDB = (() => {
     return res.ok;
   }
 
+  // Fetch all of caller's best scores from DB.
+  // Returns { bestScores: {key: score}, bestTimes: {key: time} } where
+  // key is the same format the local State uses: '<level>_<mode>' for
+  // classic/chaos/reverse/zen, and 'speed_survival' for survival.
+  //
+  // NOTE: Memory mode is intentionally skipped — the DB doesn't store the
+  // difficulty (easy/normal/hard) which is part of the local key
+  // (e.g. '50_memory_easy'). Hydrating memory from DB without the diff
+  // would mix difficulties together, so memory best scores stay local.
+  // This is a known gap; the proper fix is adding a memory_diff column
+  // to the scores table, but that's a separate change.
+  async function getMyBestScores() {
+    if (!_userId) return { bestScores: {}, bestTimes: {} };
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/scores` +
+      `?player_id=eq.${_userId}&is_extended=eq.false` +
+      `&mode=neq.memory` + // skip memory — see note above
+      `&select=mode,level,score,time_seconds`,
+      { headers: headers() }
+    );
+    if (!res.ok) return { bestScores: {}, bestTimes: {} };
+    const rows = await res.json();
+    const bestScores = {};
+    const bestTimes  = {};
+    rows.forEach(r => {
+      // Build the same key format completionKey() uses locally
+      let key;
+      if (r.mode === 'speed_survival')      key = 'speed_survival';
+      else if (r.mode === 'zen')            key = r.level + '_zen';
+      else                                  key = r.level + '_' + r.mode;
+
+      // Highest score wins for all modes
+      if (r.score != null && (bestScores[key] == null || r.score > bestScores[key])) {
+        bestScores[key] = r.score;
+      }
+      // Lowest time wins (only for timed modes — survival has no time)
+      if (r.time_seconds != null && r.mode !== 'speed_survival'
+          && (bestTimes[key] == null || r.time_seconds < bestTimes[key])) {
+        bestTimes[key] = r.time_seconds;
+      }
+    });
+    return { bestScores, bestTimes };
+  }
+
   async function getLeaderboard(mode, level, limit = 50) {
     const res = await fetch(
       `${SUPABASE_URL}/rest/v1/leaderboard_best` +
@@ -3697,6 +3757,43 @@ const SupabaseDB = (() => {
     return await res.json();
   }
 
+  // Bulk-fetch all best scores for a list of player IDs (used for friends LB).
+  // Returns a Map: player_id → { bestScores: {key: score}, bestTimes: {key: time} }
+  // Same key format as getMyBestScores. Memory mode skipped (no diff in DB).
+  async function getFriendsScores(playerIds) {
+    if (!_userId || !playerIds || playerIds.length === 0) return new Map();
+    const idList = playerIds.map(id => `"${id}"`).join(',');
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/scores` +
+      `?player_id=in.(${idList})&is_extended=eq.false` +
+      `&mode=neq.memory` +
+      `&select=player_id,mode,level,score,time_seconds`,
+      { headers: headers() }
+    );
+    if (!res.ok) return new Map();
+    const rows = await res.json();
+    const result = new Map();
+    rows.forEach(r => {
+      let key;
+      if (r.mode === 'speed_survival')      key = 'speed_survival';
+      else if (r.mode === 'zen')            key = r.level + '_zen';
+      else                                  key = r.level + '_' + r.mode;
+
+      if (!result.has(r.player_id)) {
+        result.set(r.player_id, { bestScores: {}, bestTimes: {} });
+      }
+      const bucket = result.get(r.player_id);
+      if (r.score != null && (bucket.bestScores[key] == null || r.score > bucket.bestScores[key])) {
+        bucket.bestScores[key] = r.score;
+      }
+      if (r.time_seconds != null && r.mode !== 'speed_survival'
+          && (bucket.bestTimes[key] == null || r.time_seconds < bucket.bestTimes[key])) {
+        bucket.bestTimes[key] = r.time_seconds;
+      }
+    });
+    return result;
+  }
+
   async function getFriendIds() {
     if (!_userId) return [];
     const res = await fetch(
@@ -3712,9 +3809,9 @@ const SupabaseDB = (() => {
     restoreSession, signUp, signIn, signOut, resetPassword, changeEmail, deleteAccount, signInWithGoogle,
     setSessionFromRecovery, updatePassword,
     upsertPlayer, getPlayerByFriendCode, getPlayerByUsername, getPlayerById,
-    upsertScore, getLeaderboard, getSurvivalLeaderboard,
+    upsertScore, getLeaderboard, getSurvivalLeaderboard, getMyBestScores,
     upsertDailyResult, getDailyLeaderboard, getDailyFriendResults,
-    syncFriendsToDB, refreshFriendsData, getFriendIds,
+    syncFriendsToDB, refreshFriendsData, getFriendIds, getFriendsScores,
     sendFriendRequest, acceptFriendRequest, declineFriendRequest, getIncomingRequests, removeFriend,
     get userId()    { return _userId; },
     get isLoggedIn(){ return !!_accessToken; },
@@ -5668,7 +5765,7 @@ function renderLbList() {
           <div class="lb-name">${entry.name}${entry.isMe ? t('you') : ''}</div>
           <div class="lb-sub">${entry.score != null ? t('reachedLabel') + entry.score : t('notYetPlayed')}</div>
         </div>
-        <div class="lb-time">${entry.score != null ? '#' + entry.score : '—'}</div>
+        <div class="lb-time">${entry.score != null ? entry.score : '—'}</div>
       `;
       list.appendChild(row);
     });
@@ -9792,6 +9889,37 @@ async function enterApp() {
       ).catch(() => {});
     }
 
+    // Sync best scores/times from DB — DB is source of truth for user progress.
+    // Local State is a cache; if this device has no cache (fresh sign in or
+    // post-signOut), we restore the player's history here.
+    (async () => {
+      try {
+        const { bestScores, bestTimes } = await SupabaseDB.getMyBestScores();
+        // Merge: DB wins where it has a value, but keep any unsynced local data
+        // (in case user played offline). DB rules for "better" already applied
+        // server-side via leaderboard_best view, but here we just take the
+        // numeric max/min between local and DB so neither is lost.
+        Object.entries(bestScores).forEach(([key, dbScore]) => {
+          const localScore = State.bestScores[key];
+          if (localScore == null || dbScore > localScore) {
+            State.bestScores[key] = dbScore;
+          }
+        });
+        Object.entries(bestTimes).forEach(([key, dbTime]) => {
+          const localTime = State.bestTimes[key];
+          if (localTime == null || dbTime < localTime) {
+            State.bestTimes[key] = dbTime;
+          }
+        });
+        localStorage.setItem('best_scores', JSON.stringify(State.bestScores));
+        localStorage.setItem('best_times',  JSON.stringify(State.bestTimes));
+        // Re-render leaderboard if it's open with the freshly synced numbers
+        try { renderLbList(); } catch (e) {}
+      } catch (e) {
+        console.warn('[NumRush] best scores sync failed:', e);
+      }
+    })();
+
     // Sync friends — pull friend list from DB and refresh local data
     (async () => {
       try {
@@ -9818,13 +9946,26 @@ async function enterApp() {
         if (allCodes.size > 0) {
           const fresh = await SupabaseDB.refreshFriendsData([...allCodes]);
           if (fresh && fresh.length > 0) {
+            // Also bulk-fetch their scores so leaderboard can show real numbers
+            const friendPlayerIds = fresh.map(p => p.id);
+            const scoresMap = await SupabaseDB.getFriendsScores(friendPlayerIds);
+
             const merged = fresh.map(p => {
               const existing = Friends.find(f => f.code === p.friend_code);
+              const sc = scoresMap.get(p.id) || { bestScores: {}, bestTimes: {} };
+              // times map: '<level>_<mode>' → seconds (for timed level modes + zen)
+              // survivalScores map: 'speed_survival' → number reached
+              const survivalScores = {};
+              if (sc.bestScores['speed_survival'] != null) {
+                survivalScores['speed_survival'] = sc.bestScores['speed_survival'];
+              }
               return {
                 name:   p.username || ('Player ' + p.friend_code),
                 code:   p.friend_code,
                 avatar: p.avatar_url || '',
-                times:  existing?.times || {}
+                // Preserve any locally-cached memory times (not in DB)
+                times:  Object.assign({}, existing?.times || {}, sc.bestTimes),
+                survivalScores
               };
             });
             Friends.length = 0;
