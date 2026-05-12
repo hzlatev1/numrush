@@ -4009,13 +4009,13 @@ function updateDailyStreak() {
   if (!el) return;
   const streak = getDailyStreak();
 
-  // Only rebuild if structure doesn't exist yet
-  if (!el.querySelector('.fire-emoji')) {
-    el.innerHTML = `<span class="fire-emoji">🔥</span><span class="streak-num">${streak}</span>`;
+  // Try to update existing number element; if the structure doesn't have a
+  // .streak-num span (e.g. original markup from HTML), rebuild it.
+  const numEl = el.querySelector('.streak-num');
+  if (numEl) {
+    numEl.textContent = streak;
   } else {
-    // Just update the number — no DOM rebuild, no flash
-    const numEl = el.querySelector('.streak-num');
-    if (numEl) numEl.textContent = streak;
+    el.innerHTML = `<span class="fire-emoji">🔥</span><span class="streak-num">${streak}</span>`;
   }
 
   if (streak > 0) {
@@ -4196,6 +4196,10 @@ function buildModeStrip() {
       State.memSecs = parseFloat(b.dataset.secs);
       document.querySelectorAll('.diff-btn').forEach(x => x.classList.remove('active'));
       b.classList.add('active');
+      // Rebuild level grid so completion checkmarks reflect the new difficulty
+      // (completionKey for memory includes memDiff, so each difficulty tracks
+      // its own set of completed levels)
+      buildLevelGrid();
     };
   });
   if (!State.memDiff) {
@@ -4972,6 +4976,13 @@ function showGameOver(reason, reached) {
     titleEl.className   = 'result-title fail';
   }
 
+  // Daily challenges are once-per-day — hide the Play Again button
+  // so users can't replay and overwrite results.
+  const playAgainBtn = document.getElementById('btn-play-again');
+  if (playAgainBtn) {
+    playAgainBtn.style.display = State.wasDaily ? 'none' : '';
+  }
+
   fadeTransition(() => { showScreen('gameover'); applyLang(); });
 }
 
@@ -5192,13 +5203,11 @@ document.getElementById('btn-done-custom').addEventListener('click', () => {
 });
 
 document.getElementById('btn-play-again').addEventListener('click', () => {
-  if (State.wasDaily) {
+  // Daily challenges are once-per-day — block any replay attempts
+  if (State.wasDaily) return;
+  maybeShowInterstitialAd(() => {
     fadeTransition(() => startGame(State.total));
-  } else {
-    maybeShowInterstitialAd(() => {
-      fadeTransition(() => startGame(State.total));
-    });
-  }
+  });
 });
 
 document.getElementById('btn-menu').addEventListener('click', () => {
