@@ -3097,6 +3097,11 @@
       <div class="lb-level-pills" id="lb-level-strip"></div>
     </div>
 
+    <!-- Memory difficulty pills (only shown for memory mode) -->
+    <div class="lb-level-pills-wrap hidden" id="lb-diff-pills-wrap" style="margin-top: 8px;">
+      <div class="lb-level-pills" id="lb-diff-strip"></div>
+    </div>
+
     <!-- Add friend -->
     <div class="add-friend-row">
       <input type="text" id="friend-code-input" placeholder="Enter friend code..." data-i18n-ph="enterFriendCode" maxlength="8">
@@ -3525,7 +3530,7 @@ const SupabaseDB = (() => {
   }
 
   // ── Scores ──────────────────────────────────────────────────────────────
-  async function upsertScore({ mode, level, score, time_seconds, is_extended }) {
+  async function upsertScore({ mode, level, score, time_seconds, is_extended, mode_variant }) {
     if (!_userId) return;
     // Plain INSERT — every game = new row; leaderboard_best view picks the best
     const res = await fetch(`${SUPABASE_URL}/rest/v1/scores`, {
@@ -3534,6 +3539,7 @@ const SupabaseDB = (() => {
       body: JSON.stringify({
         player_id: _userId,
         mode, level, score,
+        mode_variant: mode_variant ?? null,
         time_seconds: time_seconds ?? null,
         is_extended:  is_extended  ?? false,
         played_at: new Date().toISOString()
@@ -3549,21 +3555,14 @@ const SupabaseDB = (() => {
   // Fetch all of caller's best scores from DB.
   // Returns { bestScores: {key: score}, bestTimes: {key: time} } where
   // key is the same format the local State uses: '<level>_<mode>' for
-  // classic/chaos/reverse/zen, and 'speed_survival' for survival.
-  //
-  // NOTE: Memory mode is intentionally skipped — the DB doesn't store the
-  // difficulty (easy/normal/hard) which is part of the local key
-  // (e.g. '50_memory_easy'). Hydrating memory from DB without the diff
-  // would mix difficulties together, so memory best scores stay local.
-  // This is a known gap; the proper fix is adding a memory_diff column
-  // to the scores table, but that's a separate change.
+  // classic/chaos/reverse/zen, '<level>_memory_<diff>' for memory,
+  // and 'speed_survival' for survival.
   async function getMyBestScores() {
     if (!_userId) return { bestScores: {}, bestTimes: {} };
     const res = await fetch(
       `${SUPABASE_URL}/rest/v1/scores` +
       `?player_id=eq.${_userId}&is_extended=eq.false` +
-      `&mode=neq.memory` + // skip memory — see note above
-      `&select=mode,level,score,time_seconds`,
+      `&select=mode,mode_variant,level,score,time_seconds`,
       { headers: headers() }
     );
     if (!res.ok) return { bestScores: {}, bestTimes: {} };
@@ -3575,6 +3574,7 @@ const SupabaseDB = (() => {
       let key;
       if (r.mode === 'speed_survival')      key = 'speed_survival';
       else if (r.mode === 'zen')            key = r.level + '_zen';
+      else if (r.mode === 'memory')         key = r.level + '_memory_' + (r.mode_variant || 'normal');
       else                                  key = r.level + '_' + r.mode;
 
       // Highest score wins for all modes
@@ -3590,14 +3590,19 @@ const SupabaseDB = (() => {
     return { bestScores, bestTimes };
   }
 
-  async function getLeaderboard(mode, level, limit = 50) {
-    const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/leaderboard_best` +
+  async function getLeaderboard(mode, level, limit = 50, mode_variant = null) {
+    let url = `${SUPABASE_URL}/rest/v1/leaderboard_best` +
       `?mode=eq.${encodeURIComponent(mode)}&level=eq.${level}` +
       `&order=score.desc,time_seconds.asc&limit=${limit}` +
-      `&select=rank,player_id,username,avatar_url,score,time_seconds`,
-      { headers: headers() }
-    );
+      `&select=rank,player_id,username,avatar_url,score,time_seconds,mode_variant`;
+    if (mode_variant) {
+      url += `&mode_variant=eq.${encodeURIComponent(mode_variant)}`;
+    } else {
+      // For non-memory modes, only show rows where mode_variant IS NULL
+      // so memory rows don't contaminate the classic/chaos/etc. leaderboards
+      url += `&mode_variant=is.null`;
+    }
+    const res = await fetch(url, { headers: headers() });
     if (!res.ok) return [];
     return await res.json();
   }
@@ -3759,15 +3764,13 @@ const SupabaseDB = (() => {
 
   // Bulk-fetch all best scores for a list of player IDs (used for friends LB).
   // Returns a Map: player_id → { bestScores: {key: score}, bestTimes: {key: time} }
-  // Same key format as getMyBestScores. Memory mode skipped (no diff in DB).
   async function getFriendsScores(playerIds) {
     if (!_userId || !playerIds || playerIds.length === 0) return new Map();
     const idList = playerIds.map(id => `"${id}"`).join(',');
     const res = await fetch(
       `${SUPABASE_URL}/rest/v1/scores` +
       `?player_id=in.(${idList})&is_extended=eq.false` +
-      `&mode=neq.memory` +
-      `&select=player_id,mode,level,score,time_seconds`,
+      `&select=player_id,mode,mode_variant,level,score,time_seconds`,
       { headers: headers() }
     );
     if (!res.ok) return new Map();
@@ -3777,6 +3780,7 @@ const SupabaseDB = (() => {
       let key;
       if (r.mode === 'speed_survival')      key = 'speed_survival';
       else if (r.mode === 'zen')            key = r.level + '_zen';
+      else if (r.mode === 'memory')         key = r.level + '_memory_' + (r.mode_variant || 'normal');
       else                                  key = r.level + '_' + r.mode;
 
       if (!result.has(r.player_id)) {
@@ -5640,10 +5644,12 @@ function buildLeaderboard() {
 
 let lbMode = 'classic';
 let lbNum  = 30;
+let lbDiff = 'normal';  // memory difficulty filter — easy/normal/hard
 
 function buildLbLevelStrip() {
   buildLbModeCards();
   buildLbLevelPills();
+  buildLbDiffPills();
 }
 
 const MODE_SVGS = {
@@ -5683,6 +5689,7 @@ function buildLbModeCards() {
       lbMode = m.id;
       buildLbModeCards();
       buildLbLevelPills();
+      buildLbDiffPills();
       renderLbList();
     };
     grid.appendChild(card);
@@ -5713,6 +5720,32 @@ function buildLbLevelPills() {
       : (lvDef ? lvDef.label : '1–' + n);
     pill.innerHTML = pillLabel;
     pill.onclick     = () => { lbNum = n; buildLbLevelPills(); renderLbList(); };
+    strip.appendChild(pill);
+  });
+}
+
+// Memory difficulty pills — only visible in memory mode
+function buildLbDiffPills() {
+  const wrap  = document.getElementById('lb-diff-pills-wrap');
+  const strip = document.getElementById('lb-diff-strip');
+  if (!wrap || !strip) return;
+
+  const showDiffs = lbMode === 'memory';
+  wrap.classList.toggle('hidden', !showDiffs);
+  if (!showDiffs) return;
+
+  strip.innerHTML = '';
+  const diffs = [
+    { id: 'easy',   label: t('memDiffEasy')   || '5s — Easy' },
+    { id: 'normal', label: t('memDiffNormal') || '3s — Normal' },
+    { id: 'hard',   label: t('memDiffHard')   || '2s — Hard' },
+  ];
+
+  diffs.forEach(d => {
+    const pill = document.createElement('button');
+    pill.className = 'lb-pill' + (lbDiff === d.id ? ' active' : '');
+    pill.textContent = d.label;
+    pill.onclick = () => { lbDiff = d.id; buildLbDiffPills(); renderLbList(); };
     strip.appendChild(pill);
   });
 }
@@ -5782,7 +5815,11 @@ function renderLbList() {
   } else {
     // LEVELS: best time for selected mode + level number
     const selectedMode = lbMode;
-    const myTime = State.bestTimes[lbNum + '_' + selectedMode] ?? null;
+    // Memory mode uses an extended key with difficulty: e.g. '5_memory_easy'
+    const lbKey = selectedMode === 'memory'
+      ? (lbNum + '_memory_' + lbDiff)
+      : (lbNum + '_' + selectedMode);
+    const myTime = State.bestTimes[lbKey] ?? null;
 
     entries.push({
       name:   Profile.name || 'You',
@@ -5792,7 +5829,7 @@ function renderLbList() {
     });
 
     allFriends.forEach(f => {
-      const friendTime = f.times?.[(lbNum + '_' + selectedMode)] ?? null;
+      const friendTime = f.times?.[lbKey] ?? null;
       entries.push({ name: f.name, avatar: f.avatar || '', time: friendTime, isMe: false });
     });
 
@@ -10149,11 +10186,12 @@ showGameOver = function(reason, reached) {
     const isWin = reason === 'complete' || reason === 'zen_complete';
 
     const payload = {
-      mode:        State.mode,
-      level:       isSurvival ? 0 : State.total,
-      score:       reached,
+      mode:         State.mode,
+      mode_variant: State.mode === 'memory' ? (State.memDiff || 'normal') : null,
+      level:        isSurvival ? 0 : State.total,
+      score:        reached,
       time_seconds: isWin && !isSurvival ? parseFloat((60 - State.timerVal).toFixed(2)) : null,
-      is_extended: false
+      is_extended:  false
     };
 
     SupabaseDB.upsertScore(payload).catch(() => {});
@@ -10210,7 +10248,8 @@ renderLbList = async function() {
         isMe:   r.player_id === SupabaseDB.userId
       }));
     } else {
-      const rows = await SupabaseDB.getLeaderboard(lbMode, lbNum, 50);
+      const lbVariant = lbMode === 'memory' ? lbDiff : null;
+      const rows = await SupabaseDB.getLeaderboard(lbMode, lbNum, 50, lbVariant);
       entries = rows.map(r => ({
         rank:   r.rank,
         name:   r.username || 'Player',
