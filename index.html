@@ -5669,7 +5669,7 @@ function getLbModes() { return [
   { id:'chaos',          icon:MODE_SVGS.chaos,          label:t('modeChaos'),   metric:t('lbModeBestTime') },
   { id:'zen',            icon:MODE_SVGS.zen,            label:t('modeZen'),     metric:t('lbModeBestTime') },
   { id:'speed_survival', icon:MODE_SVGS.speed_survival, label:t('modeSpeed'),   metric:t('lbModeReached')  },
-  { id:'daily',          icon:MODE_SVGS.daily,          label:'Daily',          metric:'Today'             },
+  { id:'daily',          icon:MODE_SVGS.daily,          label:t('daily'),       metric:t('today')          },
 ]; }
 
 function buildLbModeCards() {
@@ -5903,14 +5903,15 @@ function renderDailyLbList(list) {
   const dateStr    = getDailyDateString();
 
   // Daily header info
+  const modeName = cfg.mode === 'classic' ? t('modeClassic')
+                 : cfg.mode === 'chaos'   ? t('modeChaos')
+                 : cfg.mode === 'speed_survival' ? t('modeSpeed')
+                 : cfg.mode;
   const header = document.createElement('div');
   header.className = 'daily-lb-header';
   header.innerHTML = `
     <div class="daily-lb-date">${dateStr}</div>
-    <div class="daily-lb-info">${cfg.diff} · 1–${cfg.N} · ${
-      cfg.mode === 'classic' ? 'Classic' :
-      cfg.mode === 'chaos'   ? 'Chaos'   : 'Survival'
-    }</div>
+    <div class="daily-lb-info">${cfg.diff} · 1–${cfg.N} · ${modeName}</div>
   `;
   list.appendChild(header);
 
@@ -6539,6 +6540,7 @@ const T = {
   
     // ── Daily screen ──
     daily:'Daily',
+    today:'Today',
     playedToday:'Played today',
     oneAttemptPerDay:'One attempt per day · resets at midnight',
     copyResult:'Copy result',
@@ -6751,6 +6753,7 @@ const T = {
   
     // ── Daily screen ──
     daily:'Дневно',
+    today:'Днес',
     playedToday:'Изиграно днес',
     oneAttemptPerDay:'Един опит на ден · нулира се в полунощ',
     copyResult:'Копирай резултата',
@@ -6963,6 +6966,7 @@ const T = {
   
     // ── Daily screen ──
     daily:'Täglich',
+    today:'Heute',
     playedToday:'Heute gespielt',
     oneAttemptPerDay:'Ein Versuch pro Tag · setzt um Mitternacht zurück',
     copyResult:'Ergebnis kopieren',
@@ -7175,6 +7179,7 @@ const T = {
   
     // ── Daily screen ──
     daily:'Diario',
+    today:'Hoy',
     playedToday:'Jugado hoy',
     oneAttemptPerDay:'Un intento por día · se reinicia a medianoche',
     copyResult:'Copiar resultado',
@@ -7387,6 +7392,7 @@ const T = {
   
     // ── Daily screen ──
     daily:'Quotidien',
+    today:'Aujourd\'hui',
     playedToday:'Joué aujourd\'hui',
     oneAttemptPerDay:'Un essai par jour · réinitialisation à minuit',
     copyResult:'Copier le résultat',
@@ -7599,6 +7605,7 @@ const T = {
   
     // ── Daily screen ──
     daily:'Quotidiano',
+    today:'Oggi',
     playedToday:'Giocato oggi',
     oneAttemptPerDay:'Un tentativo al giorno · si azzera a mezzanotte',
     copyResult:'Copia risultato',
@@ -7811,6 +7818,7 @@ const T = {
   
     // ── Daily screen ──
     daily:'Diário',
+    today:'Hoje',
     playedToday:'Jogado hoje',
     oneAttemptPerDay:'Uma tentativa por dia · reinicia à meia-noite',
     copyResult:'Copiar resultado',
@@ -8023,6 +8031,7 @@ const T = {
   
     // ── Daily screen ──
     daily:'Ежедневно',
+    today:'Сегодня',
     playedToday:'Сыграно сегодня',
     oneAttemptPerDay:'Одна попытка в день · сброс в полночь',
     copyResult:'Копировать результат',
@@ -8235,6 +8244,7 @@ const T = {
   
     // ── Daily screen ──
     daily:'Günlük',
+    today:'Bugün',
     playedToday:'Bugün oynandı',
     oneAttemptPerDay:'Günde bir deneme · gece yarısı sıfırlanır',
     copyResult:'Sonucu kopyala',
@@ -8447,6 +8457,7 @@ const T = {
   
     // ── Daily screen ──
     daily:'يومي',
+    today:'اليوم',
     playedToday:'تم اللعب اليوم',
     oneAttemptPerDay:'محاولة واحدة يومياً · تُعاد في منتصف الليل',
     copyResult:'نسخ النتيجة',
@@ -8659,6 +8670,7 @@ const T = {
   
     // ── Daily screen ──
     daily:'दैनिक',
+    today:'आज',
     playedToday:'आज खेला',
     oneAttemptPerDay:'दिन में एक बार · आधी रात रीसेट',
     copyResult:'परिणाम कॉपी करें',
@@ -8871,6 +8883,7 @@ const T = {
   
     // ── Daily screen ──
     daily:'デイリー',
+    today:'今日',
     playedToday:'今日プレイ済み',
     oneAttemptPerDay:'1日1回 · 深夜リセット',
     copyResult:'結果をコピー',
@@ -9083,6 +9096,7 @@ const T = {
   
     // ── Daily screen ──
     daily:'일일',
+    today:'오늘',
     playedToday:'오늘 플레이함',
     oneAttemptPerDay:'하루 한 번 · 자정에 초기화',
     copyResult:'결과 복사',
@@ -9295,6 +9309,7 @@ const T = {
   
     // ── Daily screen ──
     daily:'每日',
+    today:'今天',
     playedToday:'今日已玩',
     oneAttemptPerDay:'每日一次 · 午夜重置',
     copyResult:'复制结果',
@@ -10313,8 +10328,30 @@ renderLbList = async function() {
 
     list.innerHTML = '';
 
+    // Daily LB gets a header with date + difficulty/level/mode info
+    // (same as Friends tab) so the Global tab isn't missing context
+    if (lbMode === 'daily') {
+      const cfg     = getDailyConfig();
+      const dateStr = getDailyDateString();
+      const modeName = cfg.mode === 'classic' ? t('modeClassic')
+                     : cfg.mode === 'chaos'   ? t('modeChaos')
+                     : cfg.mode === 'speed_survival' ? t('modeSpeed')
+                     : cfg.mode;
+      const header = document.createElement('div');
+      header.className = 'daily-lb-header';
+      header.innerHTML = `
+        <div class="daily-lb-date">${dateStr}</div>
+        <div class="daily-lb-info">${cfg.diff} · 1–${cfg.N} · ${modeName}</div>
+      `;
+      list.appendChild(header);
+    }
+
     if (entries.length === 0) {
-      list.innerHTML = `<div class="lb-empty">${t('noScoresYet')}<br><span>${t('beFirst')}</span></div>`;
+      // Append empty notice after header (don't overwrite the daily header)
+      const empty = document.createElement('div');
+      empty.className = 'lb-empty';
+      empty.innerHTML = `${t('noScoresYet')}<br><span>${t('beFirst')}</span>`;
+      list.appendChild(empty);
       return;
     }
 
