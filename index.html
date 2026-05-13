@@ -5813,31 +5813,51 @@ function renderLbList() {
     });
 
   } else {
-    // LEVELS: best time for selected mode + level number
+    // LEVELS: best score + time for selected mode + level number
     const selectedMode = lbMode;
     // Memory mode uses an extended key with difficulty: e.g. '5_memory_easy'
     const lbKey = selectedMode === 'memory'
       ? (lbNum + '_memory_' + lbDiff)
       : (lbNum + '_' + selectedMode);
-    const myTime = State.bestTimes[lbKey] ?? null;
+    const myScore = State.bestScores[lbKey] ?? null;
+    const myTime  = State.bestTimes[lbKey] ?? null;
 
     entries.push({
       name:   Profile.name || 'You',
       avatar: Profile.avatar,
+      score:  myScore,
       time:   myTime,
+      total:  lbNum,
       isMe:   true,
     });
 
     allFriends.forEach(f => {
-      const friendTime = f.times?.[lbKey] ?? null;
-      entries.push({ name: f.name, avatar: f.avatar || '', time: friendTime, isMe: false });
+      const friendScore = f.scores?.[lbKey] ?? null;
+      const friendTime  = f.times?.[lbKey] ?? null;
+      entries.push({
+        name:   f.name,
+        avatar: f.avatar || '',
+        score:  friendScore,
+        time:   friendTime,
+        total:  lbNum,
+        isMe:   false
+      });
     });
 
-    const withTime    = entries.filter(e => e.time != null).sort((a,b) => a.time - b.time);
-    const withoutTime = entries.filter(e => e.time == null);
-    const sorted      = [...withTime, ...withoutTime];
+    // Sort by score desc (higher is better), then by time asc (lower is better)
+    const withData    = entries.filter(e => e.score != null);
+    const withoutData = entries.filter(e => e.score == null);
+    withData.sort((a, b) => {
+      if (a.score !== b.score) return b.score - a.score;
+      // Same score — sort by time (only if both have times)
+      if (a.time != null && b.time != null) return a.time - b.time;
+      if (a.time != null) return -1;
+      if (b.time != null) return 1;
+      return 0;
+    });
+    const sorted = [...withData, ...withoutData];
 
-    if (withTime.length === 0) {
+    if (withData.length === 0) {
       list.innerHTML = `<div class="lb-empty">${t("noScoresYet")}<br><span>${t("beFirst")}</span></div>`;
       return;
     }
@@ -5850,14 +5870,25 @@ function renderLbList() {
         + (entry.isMe ? ' me' : '')
         + (rank === 1 ? ' top1' : rank === 2 ? ' top2' : rank === 3 ? ' top3' : '');
 
+      // Display same as Global LB: "<score>/<total>" big, "<pct>% · <time>s" sub
+      const pct      = entry.score != null && entry.total
+                       ? Math.round(entry.score / entry.total * 100) + '%' : '';
+      const timeStr  = entry.time != null ? entry.time.toFixed(1) + 's' : '';
+      const scoreStr = entry.score != null
+                       ? (entry.total ? `${entry.score}/${entry.total}` : entry.score)
+                       : '—';
+      const subStr   = entry.score == null
+                       ? t('notYetPlayed')
+                       : (pct + (timeStr ? ' · ' + timeStr : ''));
+
       row.innerHTML = `
         <div class="lb-rank">${medal}</div>
         <div class="lb-avatar">${entry.avatar ? `<img src="${entry.avatar}">` : (entry.name[0]?.toUpperCase()||'?')}</div>
         <div class="lb-info">
           <div class="lb-name">${entry.name}${entry.isMe ? t('you') : ''}</div>
-          <div class="lb-sub">${entry.time != null ? t('bestTimeRow') : t('notYetPlayed')}</div>
+          <div class="lb-sub">${subStr}</div>
         </div>
-        <div class="lb-time">${entry.time != null ? entry.time.toFixed(1) + 's' : '—'}</div>
+        <div class="lb-time">${scoreStr}</div>
       `;
       list.appendChild(row);
     });
@@ -9999,18 +10030,25 @@ async function enterApp() {
             const merged = fresh.map(p => {
               const existing = Friends.find(f => f.code === p.friend_code);
               const sc = scoresMap.get(p.id) || { bestScores: {}, bestTimes: {} };
-              // times map: '<level>_<mode>' → seconds (for timed level modes + zen)
+              // times map: '<level>_<mode>' → seconds (only for WINS in timed level modes)
+              // scores map: '<level>_<mode>' → number reached (works for both WIN and LOSS)
               // survivalScores map: 'speed_survival' → number reached
               const survivalScores = {};
               if (sc.bestScores['speed_survival'] != null) {
                 survivalScores['speed_survival'] = sc.bestScores['speed_survival'];
               }
+              // Copy level-mode scores (excluding speed_survival which is separate)
+              const levelScores = {};
+              Object.entries(sc.bestScores).forEach(([k, v]) => {
+                if (k !== 'speed_survival') levelScores[k] = v;
+              });
               return {
                 name:   p.username || ('Player ' + p.friend_code),
                 code:   p.friend_code,
                 avatar: p.avatar_url || '',
                 // Preserve any locally-cached memory times (not in DB)
                 times:  Object.assign({}, existing?.times || {}, sc.bestTimes),
+                scores: levelScores,
                 survivalScores
               };
             });
