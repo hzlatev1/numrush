@@ -10185,12 +10185,25 @@ showGameOver = function(reason, reached) {
     // Only save scores — not 'timeout' runs for timed modes (those are incomplete)
     const isWin = reason === 'complete' || reason === 'zen_complete';
 
+    // Calculate time the same way showGameOver does:
+    //   - survival/zen: elapsed real time since start
+    //   - other modes:  60s - remaining timer
+    let timeSecs = null;
+    if (isWin) {
+      if (isZen) {
+        timeSecs = parseFloat(((performance.now() - State.zenStartTime) / 1000).toFixed(2));
+      } else if (!isSurvival) {
+        timeSecs = parseFloat((60 - State.timerVal).toFixed(2));
+      }
+      // isSurvival → timeSecs stays null (survival has no time metric)
+    }
+
     const payload = {
       mode:         State.mode,
       mode_variant: State.mode === 'memory' ? (State.memDiff || 'normal') : null,
       level:        isSurvival ? 0 : State.total,
       score:        reached,
-      time_seconds: isWin && !isSurvival ? parseFloat((60 - State.timerVal).toFixed(2)) : null,
+      time_seconds: timeSecs,
       is_extended:  false
     };
 
@@ -10199,12 +10212,11 @@ showGameOver = function(reason, reached) {
     // Also sync daily result if this was a daily run
     if (State.wasDaily) {
       const cfg = getDailyConfig();
-      const dailyTime = (isWin && !isSurvival) ? payload.time_seconds : null;
       SupabaseDB.upsertDailyResult({
         seed:         cfg.seed,
         reached:      reached,
         total:        cfg.N,
-        time_seconds: dailyTime
+        time_seconds: timeSecs
       }).catch(() => {});
     }
   }
